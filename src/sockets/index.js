@@ -4,6 +4,7 @@ import { pubClient, subClient } from '../config/redis.js';
 import { env } from '../config/env.js';
 import { verifyToken } from '../utils/jwt.js';
 import { registerHandlers } from './handlers.js';
+import { Shop } from '../models/index.js';
 
 /**
  * Initialise Socket.IO bound to the given HTTP server.
@@ -41,9 +42,35 @@ export function initSockets(httpServer) {
   });
 
   io.on('connection', (socket) => {
-    // Auto-join personal room
+    // Auto-join personal room — everything addressed to a user lands here.
     socket.join(`user:${socket.userId}`);
     console.log(`[socket] connected user:${socket.userId} (${socket.id})`);
+
+    // Shop owners auto-join their shop room(s) so order:new / order:status_update
+    // events from the API land in their dashboard live.
+    //
+    // We do this fire-and-forget: a tiny race window during the first ~tens of
+    // millis after connect is acceptable, and re-connects re-run this.
+    if (socket.roles?.includes('shop')) {
+      Shop.find({ owner: socket.userId })
+        .select('_id')
+        .lean()
+        .then((shops) => {
+          for (const s of shops) {
+            socket.join(`shop:${s._id}`);
+          }
+          if (shops.length) {
+            console.log(
+              `[socket] user:${socket.userId} joined shop rooms ${shops
+                .map((s) => s._id)
+                .join(', ')}`
+            );
+          }
+        })
+        .catch((err) => {
+          console.error('[socket] failed to auto-join shop rooms:', err.message);
+        });
+    }
 
     registerHandlers(io, socket);
 
