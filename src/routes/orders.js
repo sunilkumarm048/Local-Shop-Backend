@@ -215,6 +215,212 @@ router.get('/mine', requireAuth, async (req, res, next) => {
   }
 });
 
+/* ============================================================
+ * PHASE 4b — Shop-owner order management
+ *
+ * The customer-facing handlers above create Orders and let customers
+ * view their own. These handlers let a shop owner see the orders for
+ * their shop and drive the fulfilment lifecycle:
+ *
+ *   placed → accepted → preparing → ready_for_pickup
+ *               └────────→ cancelled   (reject)
+ *
+ * Every transition:
+ *   - appends to statusHistory
+ *   - emits `order:status_update` to BOTH the shop room (owner's other
+ *     tabs/devices) and the order room (customer tracking page)
+ *
+ * Split orders: a multi-shop checkout creates one Order per shop, all
+ * sharing a `cartId` with `isSplit: true`. Each shop owner only sees and
+ * acts on their own Order — but we expose GET /:id/siblings so the owner
+ * can see how the sibling shops are progressing (the legacy
+ * split-order.html surfaced this).
+ * ============================================================ */
+
+// Which status a shop owner is allowed to move an order TO, given its
+// current status. Anything not listed is rejected with 409.
+const OWNER_TRANSITIONS = {
+  placed: ['accepted', 'cancelled'],
+  accepted: ['preparing', 'cancelled'],
+  preparing: ['ready_for_pickup', 'cancelled'],
+  // ready_for_pickup onward is the delivery partner's domain (Phase 5)
+};
+
+/**
+ * Load an order and assert the current user owns the shop it belongs to.
+ * Returns the (non-lean) order document so the caller can mutate + save.
+ */
+async function assertOrderShopOwner(req, orderId) {
+  const order = await Order.findById(orderId);
+  if (!order) throw new HttpError(404, 'Order not found');
+  const ownsShop = await Shop.exists({ _id: order.shop, owner: req.user._id });
+  if (!ownsShop) throw new HttpError(403, 'You do not manage this shop');
+  return order;
+}
+
+/**
+ * Emit a status-change event to everyone who cares about this order.
+ * - shop:<shopId>  → the owner's dashboard + other devices
+ * - order:<orderId> → the customer's tracking page (and later, delivery)
+ */
+function emitStatusUpdate(req, order) {
+  const io = req.app.get('io');
+  if (!io) return;
+  const payload = {
+    orderId: order._id.toString(),
+    shopId: order.shop.toString(),
+    cartId: order.cartId,
+    status: order.status,
+    at: Date.now(),
+  };
+  io.to(`shop:${order.shop}`).emit('order:status_update', payload);
+  io.to(`order:${order._id}`).emit('order:status_update', payload);
+}
+
+/**
+ * GET /api/orders/shop/:shopId
+ *   ?status=placed|accepted|preparing|ready_for_pickup|active|all
+ *
+ * Lists orders for a shop the caller owns. `status=active` (the default)
+ * returns everything still in flight — i.e. not delivered/cancelled/refunded.
+ */
+router.get('/shop/:shopId', requireAuth, requireRole('shop'), async (req, res, next) => {
+  try {
+    const ownsShop = await Shop.exists({ _id: req.params.shopId, owner: req.user._id });
+    if (!ownsShop) throw new HttpError(403, 'You do not manage this shop');
+
+    const { status = 'active', limit = '100' } = req.query;
+    const filter = { shop: req.params.shopId };
+
+    if (status === 'active') {
+      filter.status = { $nin: ['delivered', 'cancelled', 'refunded', 'pending_payment'] };
+    } else if (status !== 'all') {
+      filter.status = String(status);
+    }
+
+    const orders = await Order.find(filter)
+      .sort({ createdAt: -1 })
+      .limit(Math.min(Number(limit) || 100, 200))
+      .lean();
+
+    res.json({ orders });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * GET /api/orders/:id/siblings — the other Orders sharing this order's cartId.
+ *
+ * For a split order, lets the owner see how sibling shops are doing.
+ * Only the items/shop/status of siblings are exposed — not customer PII
+ * beyond what's already on the owner's own order.
+ */
+router.get('/:id/siblings', requireAuth, requireRole('shop'), async (req, res, next) => {
+  try {
+    const order = await assertOrderShopOwner(req, req.params.id);
+    if (!order.cartId || !order.isSplit) {
+      return res.json({ siblings: [] });
+    }
+    const siblings = await Order.find({
+      cartId: order.cartId,
+      _id: { $ne: order._id },
+    })
+      .populate('shop', 'name logo')
+      .select('shop status items total createdAt')
+      .lean();
+    res.json({ siblings });
+  } catch (err) {
+    next(err);
+  }
+});
+
+const statusPatchSchema = z.object({
+  status: z.enum(['accepted', 'preparing', 'ready_for_pickup', 'cancelled']),
+  note: z.string().max(300).optional(),
+});
+
+/**
+ * PATCH /api/orders/:id/status — owner drives the fulfilment lifecycle.
+ *
+ * Body: { status, note? }
+ * The transition must be legal per OWNER_TRANSITIONS or we 409.
+ */
+router.patch('/:id/status', requireAuth, requireRole('shop'), async (req, res, next) => {
+  try {
+    const { status, note } = validateBody(req, statusPatchSchema);
+    const order = await assertOrderShopOwner(req, req.params.id);
+
+    const allowed = OWNER_TRANSITIONS[order.status] || [];
+    if (!allowed.includes(status)) {
+      throw new HttpError(
+        409,
+        `Cannot move an order from "${order.status}" to "${status}"`
+      );
+    }
+
+    order.status = status;
+    order.statusHistory.push({ status, by: req.user._id, note });
+    if (status === 'cancelled') {
+      // Owner rejected the order. If it was a paid (razorpay) order, the
+      // refund flow is handled separately in payments — we just flag intent.
+      order.statusHistory.push({
+        status: 'cancelled',
+        by: req.user._id,
+        note: note || 'Rejected by shop',
+      });
+    }
+    await order.save();
+
+    emitStatusUpdate(req, order);
+
+    res.json({ order });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * Convenience aliases — the dashboard calls these instead of building the
+ * PATCH body itself. They all funnel through the same transition guard.
+ */
+async function ownerTransition(req, res, next, targetStatus, defaultNote) {
+  try {
+    const order = await assertOrderShopOwner(req, req.params.id);
+    const allowed = OWNER_TRANSITIONS[order.status] || [];
+    if (!allowed.includes(targetStatus)) {
+      throw new HttpError(
+        409,
+        `Cannot move an order from "${order.status}" to "${targetStatus}"`
+      );
+    }
+    order.status = targetStatus;
+    order.statusHistory.push({
+      status: targetStatus,
+      by: req.user._id,
+      note: req.body?.note || defaultNote,
+    });
+    await order.save();
+    emitStatusUpdate(req, order);
+    res.json({ order });
+  } catch (err) {
+    next(err);
+  }
+}
+
+router.post('/:id/accept', requireAuth, requireRole('shop'), (req, res, next) =>
+  ownerTransition(req, res, next, 'accepted', 'Accepted by shop')
+);
+router.post('/:id/reject', requireAuth, requireRole('shop'), (req, res, next) =>
+  ownerTransition(req, res, next, 'cancelled', 'Rejected by shop')
+);
+router.post('/:id/preparing', requireAuth, requireRole('shop'), (req, res, next) =>
+  ownerTransition(req, res, next, 'preparing', 'Shop started preparing')
+);
+router.post('/:id/ready', requireAuth, requireRole('shop'), (req, res, next) =>
+  ownerTransition(req, res, next, 'ready_for_pickup', 'Ready for pickup')
+);
+
 /**
  * GET /api/orders/:id — must belong to caller or their shop or their delivery
  */
