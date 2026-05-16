@@ -19,9 +19,15 @@ const deliveryProfileSchema = new mongoose.Schema(
 
     available: { type: Boolean, default: false, index: true },
 
-    // Live location — updated via Socket.IO, persisted on disconnect
+    // Live location — updated via Socket.IO, persisted on disconnect.
+    //
+    // We deliberately do NOT set a default here. A freshly-signed-up partner
+    // has no GPS fix yet, so the entire `currentLocation` field is omitted
+    // until their first location ping. Combined with the `sparse: true` flag
+    // on the 2dsphere index below, MongoDB simply skips these docs in the
+    // index rather than choking on a half-formed Point with no coordinates.
     currentLocation: {
-      type: { type: String, enum: ['Point'], default: 'Point' },
+      type: { type: String, enum: ['Point'] },
       coordinates: { type: [Number] }, // [lng, lat]
       updatedAt: Date,
     },
@@ -55,7 +61,11 @@ const deliveryProfileSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-deliveryProfileSchema.index({ currentLocation: '2dsphere' });
+// `sparse: true` is critical — without it, Mongo tries to index every doc on
+// `currentLocation`, and a doc whose currentLocation is missing or has no
+// `coordinates` array throws "Can't extract geo keys / Point must be an array
+// or object, instead got type missing" on any read that touches the field.
+deliveryProfileSchema.index({ currentLocation: '2dsphere' }, { sparse: true });
 deliveryProfileSchema.index({ available: 1, vehicleType: 1 });
 
 export default mongoose.model('DeliveryProfile', deliveryProfileSchema);
