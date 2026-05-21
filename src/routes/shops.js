@@ -132,8 +132,9 @@ const createShopSchema = z.object({
  * POST /api/shops — create a shop for the current user.
  * Only callable by users who hold the 'shop' role.
  *
- * Auto-approves for now (isApproved: true). When the admin dashboard ships
- * in Phase 6, flip this back to `false` and require manual approval.
+ * As of Phase 6a, new shops are created with `isApproved: false` and are
+ * hidden from the customer-facing GET /shops until an admin approves them
+ * via PATCH /api/admin/shops/:id/approve.
  */
 router.post('/', requireAuth, requireRole('shop'), async (req, res, next) => {
   try {
@@ -162,7 +163,7 @@ router.post('/', requireAuth, requireRole('shop'), async (req, res, next) => {
       },
       openingHours: data.openingHours,
       isOpen: true,
-      isApproved: true, // TODO: Phase 6 — set false and gate behind admin approval
+      isApproved: false, // Phase 6a — gated by admin approval
     });
 
     // Live-join the owner's socket(s) to this shop's room so they receive
