@@ -3,6 +3,7 @@ import { env } from './config/env.js';
 import { connectDB } from './config/db.js';
 import { createApp } from './app.js';
 import { initSockets } from './sockets/index.js';
+import { startAutoAssign } from './services/autoAssign.js';
 
 async function start() {
   await connectDB();
@@ -19,6 +20,10 @@ async function start() {
     console.log(`[server] CORS origin: ${env.CLIENT_ORIGIN}`);
     console.log(`[server] env: ${env.NODE_ENV}`);
   });
+
+  // Phase 5b — background worker that auto-assigns idle pickups to the
+  // nearest online partner. No-op when nothing matches.
+  startAutoAssign(io);
 
   // Graceful shutdown
   const shutdown = async (signal) => {
