@@ -21,7 +21,7 @@ router.use('/delivery', delivery);
 //   router.use('/admin', adminRoutes);       // Phase 6
 
 router.get('/', (_req, res) => {
-  res.json({ name: 'local-shop-api', version: '0.3.0' });
+  res.json({ name: 'local-shop-api', version: '0.4.0' });
 });
 
 export default router;
