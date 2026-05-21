@@ -7,6 +7,7 @@ import payments from './payments.js';
 import quotes from './quotes.js';
 import delivery from './delivery.js';
 import admin from './admin.js';
+import transport from './transport.js';
 
 const router = Router();
 
@@ -18,9 +19,10 @@ router.use('/payments', payments);
 router.use('/quotes', quotes);
 router.use('/delivery', delivery);
 router.use('/admin', admin);
+router.use('/transport', transport);
 
 router.get('/', (_req, res) => {
-  res.json({ name: 'local-shop-api', version: '0.5.0' });
+  res.json({ name: 'local-shop-api', version: '0.6.0' });
 });
 
 export default router;
