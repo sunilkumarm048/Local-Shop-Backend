@@ -2,6 +2,7 @@ import bcrypt from 'bcryptjs';
 import { User, DeliveryProfile } from '../models/index.js';
 import { signToken } from '../utils/jwt.js';
 import { HttpError } from '../middleware/error.js';
+import { ADMIN_EMAILS } from '../config/env.js';
 
 const ALLOWED_SIGNUP_ROLES = ['customer', 'shop', 'delivery'];
 
@@ -36,6 +37,23 @@ function toPublic(user) {
   return obj;
 }
 
+/**
+ * PHASE 6a — env-driven admin bootstrap.
+ *
+ * If the user's email is in the ADMIN_EMAILS allowlist and they don't yet
+ * have the 'admin' role, add it. Idempotent — fine to call on every login.
+ *
+ * We mutate the in-memory `user` doc so the JWT issued right after this call
+ * already carries the admin role, no second login required.
+ */
+async function maybePromoteAdmin(user) {
+  if (!user.email) return;
+  if (!ADMIN_EMAILS.includes(user.email.toLowerCase())) return;
+  if (user.roles.includes('admin')) return;
+  user.roles.push('admin');
+  await User.updateOne({ _id: user._id }, { $addToSet: { roles: 'admin' } });
+}
+
 export async function registerWithEmail({ name, email, password, phone, role = 'customer' }) {
   if (!ALLOWED_SIGNUP_ROLES.includes(role)) {
     throw new HttpError(400, 'Invalid role');
@@ -64,6 +82,8 @@ export async function registerWithEmail({ name, email, password, phone, role = '
     await DeliveryProfile.create({ user: user._id });
   }
 
+  await maybePromoteAdmin(user);
+
   return { user: toPublic(user), token: issueToken(user) };
 }
 
@@ -78,6 +98,7 @@ export async function loginWithEmail({ email, password }) {
   if (!ok) throw new HttpError(401, 'Invalid credentials');
 
   user.lastLoginAt = new Date();
+  await maybePromoteAdmin(user);
   await user.save();
 
   return { user: toPublic(user), token: issueToken(user) };
@@ -114,6 +135,8 @@ export async function loginOrCreateWithPhone({ phone, name, roleHint }) {
     user.lastLoginAt = new Date();
     await user.save();
   }
+
+  await maybePromoteAdmin(user);
 
   return { user: toPublic(user), token: issueToken(user) };
 }
