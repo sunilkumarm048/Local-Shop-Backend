@@ -18,6 +18,10 @@ const schema = z.object({
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),
   GOOGLE_MAPS_API_KEY: z.string().optional(),
+  // PHASE 6a: comma-separated allowlist. Any user whose email is in here is
+  // auto-granted the 'admin' role on login. The easiest way to bootstrap your
+  // first admin without writing a MongoDB script.
+  ADMIN_EMAILS: z.string().optional(),
 });
 
 const parsed = schema.safeParse(process.env);
@@ -27,3 +31,12 @@ if (!parsed.success) {
 }
 
 export const env = parsed.data;
+
+/**
+ * Parsed admin allowlist (lowercased, deduped). Empty array if ADMIN_EMAILS
+ * is unset.
+ */
+export const ADMIN_EMAILS = (env.ADMIN_EMAILS || '')
+  .split(',')
+  .map((e) => e.trim().toLowerCase())
+  .filter(Boolean);
