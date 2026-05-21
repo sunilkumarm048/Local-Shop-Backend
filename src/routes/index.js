@@ -6,6 +6,7 @@ import orders from './orders.js';
 import payments from './payments.js';
 import quotes from './quotes.js';
 import delivery from './delivery.js';
+import admin from './admin.js';
 
 const router = Router();
 
@@ -16,12 +17,10 @@ router.use('/orders', orders);
 router.use('/payments', payments);
 router.use('/quotes', quotes);
 router.use('/delivery', delivery);
-
-// Placeholder for upcoming phases:
-//   router.use('/admin', adminRoutes);       // Phase 6
+router.use('/admin', admin);
 
 router.get('/', (_req, res) => {
-  res.json({ name: 'local-shop-api', version: '0.4.0' });
+  res.json({ name: 'local-shop-api', version: '0.5.0' });
 });
 
 export default router;
