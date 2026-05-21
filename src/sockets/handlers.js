@@ -19,21 +19,31 @@ export function registerHandlers(io, socket) {
     socket.leave(`order:${orderId}`);
   });
 
-  // Delivery partner reports live location ~ every 5s while on a job.
-  // We broadcast to anyone watching the relevant order(s) — Phase 5 wires this
-  // through to the customer tracking page.
+  // Delivery partner reports live location ~every 5s while on a job.
+  // We broadcast to anyone watching the relevant order(s).
+  //
+  // IMPORTANT: we set the ENTIRE currentLocation subdoc, not dot-paths.
+  // A dot-path `$set: { 'currentLocation.coordinates': [...] }` on a doc whose
+  // `currentLocation` is undefined produces `{ coordinates: [...] }` with no
+  // `type` discriminator, which fails GeoJSON validation against the 2dsphere
+  // index. Writing the whole subdoc ensures `type: 'Point'` is always present.
   socket.on('delivery:location', async ({ lat, lng, orderIds = [] }) => {
     if (typeof lat !== 'number' || typeof lng !== 'number') return;
     if (!socket.roles?.includes('delivery')) return;
 
-    // Persist last-known location (lightweight write — could be debounced)
+    // Sanity-check bounds. Cheap protection against bogus client data.
+    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return;
+
     try {
       await DeliveryProfile.updateOne(
         { user: socket.userId },
         {
           $set: {
-            'currentLocation.coordinates': [lng, lat],
-            'currentLocation.updatedAt': new Date(),
+            currentLocation: {
+              type: 'Point',
+              coordinates: [lng, lat],
+              updatedAt: new Date(),
+            },
           },
         }
       );
@@ -41,8 +51,10 @@ export function registerHandlers(io, socket) {
       console.error('[socket] failed to update location:', err.message);
     }
 
-    // Fan out to anyone tracking these orders
+    // Fan out to anyone tracking these orders (customer tracking page,
+    // shop dashboard if it ever wants to show a map, etc.)
     for (const orderId of orderIds) {
+      if (typeof orderId !== 'string') continue;
       io.to(`order:${orderId}`).emit('delivery:location', {
         orderId,
         lat,
