@@ -1,8 +1,9 @@
 import { Router } from 'express';
 import { z } from 'zod';
 
-import { TransportOrder, PricingConfig } from '../models/index.js';
+import { TransportOrder, PricingConfig, DeliveryProfile } from '../models/index.js';
 import { requireAuth } from '../middleware/auth.js';
+import { requireRole } from '../middleware/role.js';
 import { validateBody } from '../utils/validate.js';
 import { HttpError } from '../middleware/error.js';
 import { distanceKm, deliveryFee } from '../services/pricing.js';
@@ -10,18 +11,28 @@ import { distanceKm, deliveryFee } from '../services/pricing.js';
 const router = Router();
 
 /* ============================================================
- * PHASE 6b.1 — Transport booking (customer-side backend)
+ * PHASE 6b.1 — Customer transport booking
+ * PHASE 6b.2 — Delivery partner transport jobs (this turn)
  *
- * A transport order is a pure logistics booking — no shop, no products.
- * Customer picks pickup + drop + vehicle, sees a fare quote, and books.
- * The booking sits at `status: placed` until 6b.2 wires the delivery
- * partner side to accept it.
+ * Lifecycle:
+ *   pending_payment → placed (customer)
+ *   placed          → accepted   (partner grabs)
+ *   accepted        → picked_up  (partner collected cargo)
+ *   picked_up       → in_transit (partner leaving pickup)
+ *   in_transit      → delivered  (handed off + wallet credit)
  *
- * Pricing reuses the same vehicle table the grocery delivery flow uses
- * (PricingConfig.vehicles[id].perKmRate / minFee).
+ * Partners only see transport jobs whose vehicleId matches their
+ * DeliveryProfile.vehicleType — a bike partner doesn't see Tata 407 jobs.
  * ============================================================ */
 
 const VEHICLE_IDS = ['bike', '3wheeler', 'tataAce', 'pickup8ft', 'tata407'];
+
+// Partner-side state machine.
+const PARTNER_TRANSITIONS = {
+  accepted: ['picked_up'],
+  picked_up: ['in_transit'],
+  in_transit: ['delivered'],
+};
 
 const latLngSchema = z.object({
   lng: z.number().min(-180).max(180),
@@ -36,9 +47,6 @@ const partySchema = z.object({
 
 // ----- helpers -----
 
-/**
- * Compute fare for a transport leg. Same vehicle table as grocery delivery.
- */
 async function priceQuote({ vehicleId, pickup, drop }) {
   const cfg = await PricingConfig.getCurrent();
   const vehicle = cfg.vehicles?.[vehicleId];
@@ -65,10 +73,6 @@ async function priceQuote({ vehicleId, pickup, drop }) {
   };
 }
 
-/**
- * Emit a status update for a transport order — same pattern as the grocery
- * order one (shop room not relevant here; just the order room for tracking).
- */
 function emitStatusUpdate(req, order) {
   const io = req.app.get('io');
   if (!io) return;
@@ -81,14 +85,16 @@ function emitStatusUpdate(req, order) {
   });
 }
 
+async function getOrCreateProfile(userId) {
+  let profile = await DeliveryProfile.findOne({ user: userId });
+  if (!profile) profile = await DeliveryProfile.create({ user: userId });
+  return profile;
+}
+
 // ============================================================
-// PUBLIC-ish (auth required) endpoints
+// CUSTOMER — quotes
 // ============================================================
 
-/**
- * POST /api/transport/quote — fare estimate for a single vehicle choice.
- *   Body: { vehicleId, pickup: {lng,lat}, drop: {lng,lat} }
- */
 const quoteSchema = z.object({
   vehicleId: z.enum(VEHICLE_IDS),
   pickup: latLngSchema,
@@ -105,20 +111,13 @@ router.post('/quote', requireAuth, async (req, res, next) => {
   }
 });
 
-/**
- * POST /api/transport/quote-all — fare for every vehicle, sorted by total.
- *   Body: { pickup, drop }
- * Used by the customer booking page to render the "pick a vehicle" grid.
- */
 router.post('/quote-all', requireAuth, async (req, res, next) => {
   try {
     const data = validateBody(req, z.object({ pickup: latLngSchema, drop: latLngSchema }));
     const cfg = await PricingConfig.getCurrent();
-
     const quotes = [];
     for (const vehicleId of VEHICLE_IDS) {
       if (!cfg.vehicles?.[vehicleId]) continue;
-      // priceQuote may throw if a vehicle was deleted from config; skip those.
       try {
         quotes.push(await priceQuote({ vehicleId, pickup: data.pickup, drop: data.drop }));
       } catch {
@@ -132,20 +131,10 @@ router.post('/quote-all', requireAuth, async (req, res, next) => {
   }
 });
 
-/**
- * POST /api/transport — book a transport order.
- *
- * Body: {
- *   vehicleId,
- *   pickup: { name, phone, address, location: {lng,lat} },
- *   drop:   { name, phone, address, location: {lng,lat} },
- *   estimatedWeightKg?, notes?, paymentMethod ('cod' | 'razorpay')
- * }
- *
- * For COD we mark status='placed' immediately. Razorpay flow follows the same
- * pattern as grocery checkout (placed=pending_payment until the webhook flips
- * it to placed) — implemented when real Razorpay keys land.
- */
+// ============================================================
+// CUSTOMER — book / list / get / cancel
+// ============================================================
+
 const bookSchema = z.object({
   vehicleId: z.enum(VEHICLE_IDS),
   pickup: partySchema.extend({ location: latLngSchema }),
@@ -158,14 +147,11 @@ const bookSchema = z.object({
 router.post('/', requireAuth, async (req, res, next) => {
   try {
     const data = validateBody(req, bookSchema);
-
-    // Re-price server-side — don't trust whatever the client sent.
     const quote = await priceQuote({
       vehicleId: data.vehicleId,
       pickup: data.pickup.location,
       drop: data.drop.location,
     });
-
     const isCod = data.paymentMethod === 'cod';
 
     const order = await TransportOrder.create({
@@ -175,19 +161,13 @@ router.post('/', requireAuth, async (req, res, next) => {
         name: data.pickup.name,
         phone: data.pickup.phone,
         address: data.pickup.address,
-        location: {
-          type: 'Point',
-          coordinates: [data.pickup.location.lng, data.pickup.location.lat],
-        },
+        location: { type: 'Point', coordinates: [data.pickup.location.lng, data.pickup.location.lat] },
       },
       drop: {
         name: data.drop.name,
         phone: data.drop.phone,
         address: data.drop.address,
-        location: {
-          type: 'Point',
-          coordinates: [data.drop.location.lng, data.drop.location.lat],
-        },
+        location: { type: 'Point', coordinates: [data.drop.location.lng, data.drop.location.lat] },
       },
       distanceKm: quote.distanceKm,
       estimatedWeightKg: data.estimatedWeightKg,
@@ -197,16 +177,9 @@ router.post('/', requireAuth, async (req, res, next) => {
       total: quote.total,
       status: isCod ? 'placed' : 'pending_payment',
       statusHistory: [
-        {
-          status: isCod ? 'placed' : 'pending_payment',
-          by: req.user._id,
-          note: 'Created by customer',
-        },
+        { status: isCod ? 'placed' : 'pending_payment', by: req.user._id, note: 'Created by customer' },
       ],
-      payment: {
-        method: data.paymentMethod,
-        status: isCod ? 'pending' : 'pending', // COD: collected at drop
-      },
+      payment: { method: data.paymentMethod, status: 'pending' },
       placedAt: isCod ? new Date() : undefined,
     });
 
@@ -216,10 +189,6 @@ router.post('/', requireAuth, async (req, res, next) => {
   }
 });
 
-/**
- * GET /api/transport/mine — customer's own transport bookings.
- *   ?status=active|all (default active = anything not delivered/cancelled)
- */
 router.get('/mine', requireAuth, async (req, res, next) => {
   try {
     const { status = 'active' } = req.query;
@@ -239,11 +208,95 @@ router.get('/mine', requireAuth, async (req, res, next) => {
   }
 });
 
+// ============================================================
+// DELIVERY PARTNER — job feed
+// (Specific routes BEFORE the `/:id` catch-all, otherwise 'jobs' / 'my-jobs'
+// would be interpreted as IDs.)
+// ============================================================
+
 /**
- * GET /api/transport/:id — single transport order.
- * Visible to the customer who placed it, the assigned delivery partner, and
- * admins. Anyone else gets 404 (don't leak existence).
+ * GET /api/transport/jobs?lng=&lat=&radiusKm=
+ *
+ * Available transport bookings near the partner, filtered by their vehicleType.
+ * If the partner hasn't set a vehicleType yet, returns 400 (with a clear
+ * message) — the dashboard renders a "set your vehicle" prompt off this.
+ *
+ * Uses the 2dsphere on pickup.location to query.
  */
+router.get('/jobs', requireAuth, requireRole('delivery'), async (req, res, next) => {
+  try {
+    let { lng, lat, radiusKm = '5' } = req.query;
+
+    const profile = await getOrCreateProfile(req.user._id);
+    if (!profile.vehicleType) {
+      throw new HttpError(400, 'Set your vehicle type to see transport jobs');
+    }
+
+    if (lng == null || lat == null) {
+      const coords = profile.currentLocation?.coordinates;
+      if (!coords || coords.length !== 2) {
+        throw new HttpError(400, 'Location required — enable GPS or pass lng/lat');
+      }
+      [lng, lat] = coords;
+    }
+    lng = Number(lng);
+    lat = Number(lat);
+    const radius = Math.min(Math.max(Number(radiusKm) || 5, 1), 25);
+
+    const orders = await TransportOrder.find({
+      vehicleId: profile.vehicleType,
+      status: 'placed',
+      deliveryPartner: { $in: [null, undefined] },
+      'pickup.location': {
+        $nearSphere: {
+          $geometry: { type: 'Point', coordinates: [lng, lat] },
+          $maxDistance: radius * 1000,
+        },
+      },
+    })
+      .sort({ createdAt: 1 })
+      .limit(50)
+      .lean();
+
+    // Attach distance-to-pickup (computed locally; the geo query has already
+    // narrowed the set so this is over ≤50 docs).
+    const jobs = orders.map((o) => {
+      const pc = o.pickup?.location?.coordinates;
+      const distToPickup = pc ? distanceKm([lng, lat], pc) : null;
+      return {
+        ...o,
+        distanceToPickupKm: distToPickup != null ? Math.round(distToPickup * 10) / 10 : null,
+      };
+    });
+
+    res.json({ jobs });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * GET /api/transport/my-jobs — partner's currently-assigned active transport.
+ */
+router.get('/my-jobs', requireAuth, requireRole('delivery'), async (req, res, next) => {
+  try {
+    const orders = await TransportOrder.find({
+      deliveryPartner: req.user._id,
+      status: { $in: ['accepted', 'picked_up', 'in_transit'] },
+    })
+      .sort({ updatedAt: -1 })
+      .lean();
+    res.json({ jobs: orders });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ============================================================
+// CUSTOMER — single booking + cancel
+// (These come AFTER /jobs and /my-jobs above for routing precedence.)
+// ============================================================
+
 router.get('/:id', requireAuth, async (req, res, next) => {
   try {
     const order = await TransportOrder.findById(req.params.id)
@@ -258,17 +311,12 @@ router.get('/:id', requireAuth, async (req, res, next) => {
     if (!isCustomer && !isPartner && !isAdmin) {
       return res.status(404).json({ error: 'Booking not found' });
     }
-
     res.json({ order });
   } catch (err) {
     next(err);
   }
 });
 
-/**
- * POST /api/transport/:id/cancel — customer cancels their own booking.
- * Only allowed if no partner has accepted yet (status placed / pending_payment).
- */
 router.post('/:id/cancel', requireAuth, async (req, res, next) => {
   try {
     const order = await TransportOrder.findById(req.params.id);
@@ -280,11 +328,7 @@ router.post('/:id/cancel', requireAuth, async (req, res, next) => {
       throw new HttpError(409, 'This booking can no longer be cancelled');
     }
     order.status = 'cancelled';
-    order.statusHistory.push({
-      status: 'cancelled',
-      by: req.user._id,
-      note: 'Cancelled by customer',
-    });
+    order.statusHistory.push({ status: 'cancelled', by: req.user._id, note: 'Cancelled by customer' });
     await order.save();
     emitStatusUpdate(req, order);
     res.json({ order });
@@ -292,5 +336,116 @@ router.post('/:id/cancel', requireAuth, async (req, res, next) => {
     next(err);
   }
 });
+
+// ============================================================
+// DELIVERY PARTNER — grab + lifecycle
+// ============================================================
+
+/**
+ * POST /api/transport/:id/accept — partner grabs a transport job.
+ * Same first-wins guard as grocery accept: atomic update whose filter
+ * requires deliveryPartner to still be null. Also enforces vehicleType match
+ * server-side (a bike partner can't accept a Tata 407 job by tampering with
+ * the client).
+ */
+router.post('/:id/accept', requireAuth, requireRole('delivery'), async (req, res, next) => {
+  try {
+    const profile = await getOrCreateProfile(req.user._id);
+    if (!profile.available) {
+      throw new HttpError(409, 'Go online before accepting jobs');
+    }
+    if (!profile.vehicleType) {
+      throw new HttpError(409, 'Set your vehicle type first');
+    }
+
+    const result = await TransportOrder.findOneAndUpdate(
+      {
+        _id: req.params.id,
+        status: 'placed',
+        vehicleId: profile.vehicleType,
+        deliveryPartner: { $in: [null, undefined] },
+      },
+      {
+        $set: { deliveryPartner: req.user._id, status: 'accepted' },
+        $push: {
+          statusHistory: { status: 'accepted', by: req.user._id, note: 'Accepted by delivery partner' },
+        },
+      },
+      { new: true }
+    );
+
+    if (!result) {
+      const exists = await TransportOrder.exists({ _id: req.params.id });
+      throw new HttpError(
+        exists ? 409 : 404,
+        exists ? 'This job was already taken or doesn\'t match your vehicle' : 'Booking not found'
+      );
+    }
+
+    emitStatusUpdate(req, result);
+    const io = req.app.get('io');
+    io?.to('delivery:available').emit('job:taken', {
+      orderId: result._id.toString(),
+      kind: 'transport',
+    });
+
+    res.json({ order: result });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * Shared partner transition handler.
+ */
+async function partnerTransition(req, res, next, targetStatus, note) {
+  try {
+    const order = await TransportOrder.findById(req.params.id);
+    if (!order) throw new HttpError(404, 'Booking not found');
+    if (order.deliveryPartner?.toString() !== req.user._id.toString()) {
+      throw new HttpError(403, 'This job is not assigned to you');
+    }
+    const allowed = PARTNER_TRANSITIONS[order.status] || [];
+    if (!allowed.includes(targetStatus)) {
+      throw new HttpError(
+        409,
+        `Cannot move a job from "${order.status}" to "${targetStatus}"`
+      );
+    }
+    order.status = targetStatus;
+    order.statusHistory.push({ status: targetStatus, by: req.user._id, note });
+    if (targetStatus === 'delivered') order.deliveredAt = new Date();
+    await order.save();
+
+    // Wallet credit on delivery — same pattern as grocery.
+    if (targetStatus === 'delivered') {
+      await DeliveryProfile.updateOne(
+        { user: req.user._id },
+        {
+          $inc: {
+            walletBalance: order.fee || 0,
+            totalEarnings: order.fee || 0,
+            totalDeliveries: 1,
+          },
+        }
+      );
+    }
+
+    emitStatusUpdate(req, order);
+    res.json({ order });
+  } catch (err) {
+    next(err);
+  }
+}
+
+router.post('/:id/pickup', requireAuth, requireRole('delivery'), (req, res, next) =>
+  partnerTransition(req, res, next, 'picked_up', 'Cargo collected from pickup')
+);
+router.post('/:id/start', requireAuth, requireRole('delivery'), (req, res, next) =>
+  partnerTransition(req, res, next, 'in_transit', 'In transit to drop-off')
+);
+router.post('/:id/deliver', requireAuth, requireRole('delivery'), (req, res, next) =>
+  partnerTransition(req, res, next, 'delivered', 'Delivered to recipient')
+);
 
 export default router;
