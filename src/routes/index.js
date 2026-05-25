@@ -22,7 +22,7 @@ router.use('/admin', admin);
 router.use('/transport', transport);
 
 router.get('/', (_req, res) => {
-  res.json({ name: 'local-shop-api', version: '0.7.0' });
+  res.json({ name: 'local-shop-api', version: '0.8.0' });
 });
 
 export default router;
