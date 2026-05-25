@@ -286,6 +286,11 @@ router.post(
 
 /**
  * Shared handler for the delivery-side transitions.
+ *
+ * 8a: when targetStatus === 'delivered', optionally accepts a
+ *     `proofImageUrl` body field (Cloudinary URL). We validate the host to
+ *     make sure it's our Cloudinary cloud — prevents partners from pasting
+ *     arbitrary URLs as "proof".
  */
 async function deliveryTransition(req, res, next, targetStatus, note) {
   try {
@@ -308,6 +313,26 @@ async function deliveryTransition(req, res, next, targetStatus, note) {
     order.statusHistory.push({ status: targetStatus, by: req.user._id, note });
     if (targetStatus === 'delivered') {
       order.deliveredAt = new Date();
+
+      // Optional proof-of-delivery URL. Must be from our Cloudinary cloud,
+      // not an arbitrary URL — prevents abuse where a partner pastes some
+      // unrelated public image as "proof".
+      const proofImageUrl = req.body?.proofImageUrl;
+      if (proofImageUrl) {
+        const cloudName = process.env.CLOUDINARY_CLOUD_NAME || '';
+        if (typeof proofImageUrl !== 'string' || proofImageUrl.length > 500) {
+          throw new HttpError(400, 'proofImageUrl is invalid');
+        }
+        // If we know our cloud, enforce it. If we don't (env not set),
+        // accept any https URL as a fallback so the feature degrades gracefully.
+        const isOurCloud = cloudName
+          ? proofImageUrl.startsWith(`https://res.cloudinary.com/${cloudName}/`)
+          : /^https:\/\/res\.cloudinary\.com\//.test(proofImageUrl);
+        if (!isOurCloud) {
+          throw new HttpError(400, 'proofImageUrl must be a Cloudinary URL');
+        }
+        order.proofImageUrl = proofImageUrl;
+      }
     }
     await order.save();
 
