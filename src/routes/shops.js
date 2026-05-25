@@ -7,6 +7,7 @@ import { optionalAuth, requireAuth } from '../middleware/auth.js';
 import { requireRole } from '../middleware/role.js';
 import { validateBody } from '../utils/validate.js';
 import { HttpError } from '../middleware/error.js';
+import { shopAnalytics } from '../services/analytics.js';
 
 const router = Router();
 
@@ -189,6 +190,35 @@ router.get('/mine', requireAuth, requireRole('shop'), async (req, res, next) => 
       .populate('category')
       .lean();
     res.json({ shops });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * GET /api/shops/mine/analytics?days=30 — analytics for the caller's first
+ * shop. If they own multiple, the `shopId` query param chooses which one;
+ * otherwise we default to the first one we find.
+ *
+ * Returns:
+ *   {
+ *     range: { from, to, days },
+ *     summary: { totalOrders, totalRevenue, avgOrderValue, completionRate, delivered },
+ *     series: [{ day: 'YYYY-MM-DD', orders, revenue }],   // dense, one per day
+ *     topProducts: [{ name, qty, revenue }],
+ *   }
+ */
+router.get('/mine/analytics', requireAuth, requireRole('shop'), async (req, res, next) => {
+  try {
+    const days = Math.min(Math.max(Number(req.query.days) || 30, 1), 90);
+    const shopIdFilter = { owner: req.user._id };
+    if (req.query.shopId) shopIdFilter._id = req.query.shopId;
+
+    const shop = await Shop.findOne(shopIdFilter).select('_id name').lean();
+    if (!shop) throw new HttpError(404, 'No shop found for this user');
+
+    const data = await shopAnalytics({ shopId: shop._id, days });
+    res.json({ shop: { _id: shop._id, name: shop.name }, ...data });
   } catch (err) {
     next(err);
   }
