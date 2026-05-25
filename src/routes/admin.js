@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 
-import { User, Shop, Order, Category } from '../models/index.js';
+import { User, Shop, Order, Category, PricingConfig, WithdrawRequest, DeliveryProfile } from '../models/index.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireRole } from '../middleware/role.js';
 import { validateBody } from '../utils/validate.js';
@@ -332,6 +332,142 @@ router.delete('/categories/:id', async (req, res, next) => {
     );
     if (!category) throw new HttpError(404, 'Category not found');
     res.json({ ok: true, category });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ============================================================
+// PHASE 7a — Pricing config
+// ============================================================
+
+/** Public read shape — frontend reads to populate the editor. */
+router.get('/pricing', async (_req, res, next) => {
+  try {
+    const cfg = await PricingConfig.getCurrent();
+    res.json({ config: cfg });
+  } catch (err) {
+    next(err);
+  }
+});
+
+const vehicleUpdateSchema = z.object({
+  maxKg: z.number().positive().max(100_000),
+  perKmRate: z.number().nonnegative().max(10_000),
+  minFee: z.number().nonnegative().max(100_000),
+});
+
+const pricingUpdateSchema = z.object({
+  vehicles: z.record(z.string(), vehicleUpdateSchema).optional(),
+  handlingFee: z.number().nonnegative().max(10_000).optional(),
+  platformFeePercent: z.number().min(0).max(50).optional(),
+});
+
+/**
+ * PATCH /api/admin/pricing — partial update.
+ *
+ * Body may contain any subset of:
+ *   - vehicles: { [vehicleId]: { maxKg, perKmRate, minFee } }
+ *   - handlingFee: number
+ *   - platformFeePercent: number
+ *
+ * Vehicle ids must already exist in the config (we don't allow adding new
+ * vehicles via this endpoint — keeps the set in sync with the frontend enum).
+ */
+router.patch('/pricing', async (req, res, next) => {
+  try {
+    const data = validateBody(req, pricingUpdateSchema);
+    const cfg = await PricingConfig.getCurrent();
+
+    if (data.vehicles) {
+      for (const [vehicleId, fields] of Object.entries(data.vehicles)) {
+        if (!cfg.vehicles?.[vehicleId]) {
+          throw new HttpError(400, `Unknown vehicle "${vehicleId}"`);
+        }
+        cfg.vehicles[vehicleId].maxKg = fields.maxKg;
+        cfg.vehicles[vehicleId].perKmRate = fields.perKmRate;
+        cfg.vehicles[vehicleId].minFee = fields.minFee;
+      }
+      // Mongoose can't always tell nested mixed paths changed; mark explicitly.
+      cfg.markModified('vehicles');
+    }
+    if (typeof data.handlingFee === 'number') cfg.handlingFee = data.handlingFee;
+    if (typeof data.platformFeePercent === 'number') cfg.platformFeePercent = data.platformFeePercent;
+
+    await cfg.save();
+    res.json({ config: cfg });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ============================================================
+// PHASE 7a — Withdrawal processing
+// ============================================================
+
+router.get('/withdrawals', async (req, res, next) => {
+  try {
+    const { status = 'all' } = req.query;
+    const filter = {};
+    if (status !== 'all') filter.status = String(status);
+    const requests = await WithdrawRequest.find(filter)
+      .populate('deliveryPartner', 'name email phone')
+      .sort({ createdAt: -1 })
+      .limit(200)
+      .lean();
+    res.json({ requests });
+  } catch (err) {
+    next(err);
+  }
+});
+
+const withdrawProcessSchema = z.object({
+  action: z.enum(['approve', 'paid', 'reject']),
+  transactionRef: z.string().trim().max(120).optional(),
+  rejectionReason: z.string().trim().max(500).optional(),
+});
+
+/**
+ * PATCH /api/admin/withdrawals/:id — move a request along its lifecycle.
+ *
+ * action lifecycle:
+ *   pending → approve  (intent to pay, no money moved yet)
+ *   approved → paid    (transactionRef required; partner wallet was already
+ *                       debited at submit-time, so nothing to debit again here)
+ *   pending → reject   (rejectionReason required; refund the wallet)
+ */
+router.patch('/withdrawals/:id', async (req, res, next) => {
+  try {
+    const data = validateBody(req, withdrawProcessSchema);
+    const wr = await WithdrawRequest.findById(req.params.id);
+    if (!wr) throw new HttpError(404, 'Withdrawal request not found');
+
+    if (data.action === 'approve') {
+      if (wr.status !== 'pending') throw new HttpError(409, `Cannot approve from "${wr.status}"`);
+      wr.status = 'approved';
+    } else if (data.action === 'paid') {
+      if (wr.status !== 'approved') throw new HttpError(409, `Cannot mark paid from "${wr.status}"`);
+      if (!data.transactionRef) throw new HttpError(400, 'transactionRef is required');
+      wr.status = 'paid';
+      wr.transactionRef = data.transactionRef;
+    } else if (data.action === 'reject') {
+      if (!['pending', 'approved'].includes(wr.status)) {
+        throw new HttpError(409, `Cannot reject from "${wr.status}"`);
+      }
+      if (!data.rejectionReason) throw new HttpError(400, 'rejectionReason is required');
+      wr.status = 'rejected';
+      wr.rejectionReason = data.rejectionReason;
+      // Refund the partner's wallet — we debited at submit-time.
+      await DeliveryProfile.updateOne(
+        { user: wr.deliveryPartner },
+        { $inc: { walletBalance: wr.amount } }
+      );
+    }
+    wr.processedBy = req.user._id;
+    wr.processedAt = new Date();
+    await wr.save();
+
+    res.json({ request: wr });
   } catch (err) {
     next(err);
   }
