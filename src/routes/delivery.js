@@ -7,6 +7,7 @@ import { requireRole } from '../middleware/role.js';
 import { validateBody } from '../utils/validate.js';
 import { HttpError } from '../middleware/error.js';
 import { distanceKm } from '../services/pricing.js';
+import { deliveryAnalytics } from '../services/analytics.js';
 
 const router = Router();
 
@@ -417,6 +418,26 @@ router.get('/withdrawals/mine', requireAuth, requireRole('delivery'), async (req
       .limit(50)
       .lean();
     res.json({ requests });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ============================================================
+// PHASE 7b — Analytics
+// ============================================================
+
+/**
+ * GET /api/delivery/me/analytics?days=30 — partner self-service analytics.
+ *
+ * Returns a daily earnings/deliveries series for the last N days (1..90,
+ * default 30) plus summary KPIs across both grocery and transport deliveries.
+ */
+router.get('/me/analytics', requireAuth, requireRole('delivery'), async (req, res, next) => {
+  try {
+    const days = Math.min(Math.max(Number(req.query.days) || 30, 1), 90);
+    const data = await deliveryAnalytics({ userId: req.user._id, days });
+    res.json(data);
   } catch (err) {
     next(err);
   }
