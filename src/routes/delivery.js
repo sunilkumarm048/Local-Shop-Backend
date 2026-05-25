@@ -443,4 +443,53 @@ router.get('/me/analytics', requireAuth, requireRole('delivery'), async (req, re
   }
 });
 
+// ============================================================
+// PHASE 7c — Document submission (partner side)
+// ============================================================
+
+const docsUpdateSchema = z.object({
+  drivingLicenseUrl: z.string().trim().url().max(500).optional().or(z.literal('')),
+  aadhaarUrl: z.string().trim().url().max(500).optional().or(z.literal('')),
+  vehicleRcUrl: z.string().trim().url().max(500).optional().or(z.literal('')),
+});
+
+/**
+ * PATCH /api/delivery/me/documents — partner submits / updates document URLs.
+ *
+ * URL-based for now (no file uploads — those land in Phase 8 with Cloudinary).
+ * Submitting any updated URL flips verified=false so admin re-reviews.
+ *
+ * To clear a doc, send an empty string for that field. Omitted fields are
+ * left unchanged.
+ */
+router.patch('/me/documents', requireAuth, requireRole('delivery'), async (req, res, next) => {
+  try {
+    const data = validateBody(req, docsUpdateSchema);
+
+    const $set = { 'documents.verified': false };
+    if (typeof data.drivingLicenseUrl === 'string') {
+      $set['documents.drivingLicenseUrl'] = data.drivingLicenseUrl;
+    }
+    if (typeof data.aadhaarUrl === 'string') {
+      $set['documents.aadhaarUrl'] = data.aadhaarUrl;
+    }
+    if (typeof data.vehicleRcUrl === 'string') {
+      $set['documents.vehicleRcUrl'] = data.vehicleRcUrl;
+    }
+
+    let profile = await DeliveryProfile.findOneAndUpdate(
+      { user: req.user._id },
+      { $set },
+      { new: true }
+    );
+    if (!profile) {
+      // Race-condition safety — auto-create the profile if it's missing.
+      profile = await DeliveryProfile.create({ user: req.user._id, documents: $set });
+    }
+    res.json({ profile });
+  } catch (err) {
+    next(err);
+  }
+});
+
 export default router;
