@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 
-import { Order, Shop, DeliveryProfile } from '../models/index.js';
+import { Order, Shop, DeliveryProfile, WithdrawRequest } from '../models/index.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireRole } from '../middleware/role.js';
 import { validateBody } from '../utils/validate.js';
@@ -342,5 +342,84 @@ router.post('/jobs/:orderId/onway', requireAuth, requireRole('delivery'), (req, 
 router.post('/jobs/:orderId/deliver', requireAuth, requireRole('delivery'), (req, res, next) =>
   deliveryTransition(req, res, next, 'delivered', 'Delivered to customer')
 );
+
+// ============================================================
+// PHASE 7a — Partner-side withdrawal
+// ============================================================
+
+const MIN_WITHDRAW = 100;
+
+const withdrawSubmitSchema = z
+  .object({
+    amount: z.number().int().min(MIN_WITHDRAW).max(1_000_000),
+    method: z.enum(['upi', 'bank']),
+    upiId: z.string().trim().min(3).max(80).optional(),
+    bankDetails: z
+      .object({
+        accountName: z.string().trim().min(1).max(120),
+        accountNumber: z.string().trim().min(6).max(40),
+        ifsc: z.string().trim().regex(/^[A-Za-z]{4}0[A-Za-z0-9]{6}$/, 'Invalid IFSC code'),
+      })
+      .optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (data.method === 'upi' && !data.upiId) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'UPI id required for UPI method' });
+    }
+    if (data.method === 'bank' && !data.bankDetails) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Bank details required for bank method' });
+    }
+  });
+
+/**
+ * POST /api/delivery/withdrawals — partner submits a withdrawal request.
+ *
+ * We debit the wallet at submit-time (not at admin approval), so two people
+ * trying to drain the same balance in parallel can't both succeed. If admin
+ * rejects later, the wallet is refunded server-side (see admin.js).
+ *
+ * Uses a conditional update against the wallet balance to avoid race conditions
+ * — if two requests for ₹500 arrive on a ₹600 balance simultaneously, only one
+ * passes the `walletBalance: { $gte: amount }` filter.
+ */
+router.post('/withdrawals', requireAuth, requireRole('delivery'), async (req, res, next) => {
+  try {
+    const data = validateBody(req, withdrawSubmitSchema);
+
+    const debited = await DeliveryProfile.findOneAndUpdate(
+      { user: req.user._id, walletBalance: { $gte: data.amount } },
+      { $inc: { walletBalance: -data.amount } },
+      { new: true }
+    );
+    if (!debited) {
+      throw new HttpError(409, 'Insufficient wallet balance for this withdrawal');
+    }
+
+    const wr = await WithdrawRequest.create({
+      deliveryPartner: req.user._id,
+      amount: data.amount,
+      method: data.method,
+      upiId: data.method === 'upi' ? data.upiId : undefined,
+      bankDetails: data.method === 'bank' ? data.bankDetails : undefined,
+      status: 'pending',
+    });
+
+    res.status(201).json({ request: wr, profile: debited });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/withdrawals/mine', requireAuth, requireRole('delivery'), async (req, res, next) => {
+  try {
+    const requests = await WithdrawRequest.find({ deliveryPartner: req.user._id })
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .lean();
+    res.json({ requests });
+  } catch (err) {
+    next(err);
+  }
+});
 
 export default router;
