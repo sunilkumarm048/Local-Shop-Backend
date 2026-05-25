@@ -105,6 +105,9 @@ const orderSchema = new mongoose.Schema(
 
     placedAt: Date,
     deliveredAt: Date,
+    // 8a: optional proof-of-delivery photo URL (Cloudinary CDN). Captured at
+    // the moment the partner taps "Mark delivered" — helps resolve disputes.
+    proofImageUrl: String,
   },
   { timestamps: true }
 );
