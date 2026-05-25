@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 
-import { User, Shop, Order, Category, PricingConfig, WithdrawRequest, DeliveryProfile } from '../models/index.js';
+import { User, Shop, Order, Category, PricingConfig, WithdrawRequest, DeliveryProfile, Product } from '../models/index.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireRole } from '../middleware/role.js';
 import { validateBody } from '../utils/validate.js';
@@ -468,6 +468,174 @@ router.patch('/withdrawals/:id', async (req, res, next) => {
     await wr.save();
 
     res.json({ request: wr });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ============================================================
+// PHASE 7c — Shop discounts
+// ============================================================
+
+const shopDiscountSchema = z.object({
+  enabled: z.boolean(),
+  type: z.enum(['percent', 'flat']),
+  value: z.number().nonnegative().max(100_000),
+  label: z.string().trim().max(80).default(''),
+});
+
+/**
+ * PATCH /api/admin/shops/:id/discount — set/clear a shop's discount.
+ *
+ * The discount lives on the Shop document; pricing.js applies it
+ * automatically at quote time. If `enabled: false` we still persist the
+ * other fields so the previous config is preserved when re-enabled.
+ *
+ * Percent values are validated 0-100 because larger percent discounts make
+ * no sense; flat values are validated against the 100k cap (already done
+ * by the schema).
+ */
+router.patch('/shops/:id/discount', async (req, res, next) => {
+  try {
+    const data = validateBody(req, shopDiscountSchema);
+    if (data.type === 'percent' && data.value > 100) {
+      throw new HttpError(400, 'Percent discount cannot exceed 100');
+    }
+    const shop = await Shop.findByIdAndUpdate(
+      req.params.id,
+      { $set: { discount: data } },
+      { new: true }
+    );
+    if (!shop) throw new HttpError(404, 'Shop not found');
+    res.json({ shop });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ============================================================
+// PHASE 7c — Admin product oversight
+// ============================================================
+
+/**
+ * GET /api/admin/products?q=&shopId=&page=&limit=
+ *
+ * Cross-shop product search for moderation. Supports text search on name
+ * and category, optional shopId filter, basic pagination.
+ *
+ * Default sort: newest first. `inactive` query=true also surfaces soft-
+ * deleted products so admins can review takedowns.
+ */
+router.get('/products', async (req, res, next) => {
+  try {
+    const q = String(req.query.q || '').trim();
+    const shopId = String(req.query.shopId || '').trim();
+    const includeInactive = req.query.inactive === 'true';
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 20));
+
+    const filter = {};
+    if (!includeInactive) filter.isActive = { $ne: false };
+    if (shopId) filter.shop = shopId;
+    if (q) {
+      filter.$or = [
+        { name: { $regex: q, $options: 'i' } },
+        { category: { $regex: q, $options: 'i' } },
+      ];
+    }
+
+    const [products, total] = await Promise.all([
+      Product.find(filter)
+        .populate('shop', 'name')
+        .sort({ createdAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean(),
+      Product.countDocuments(filter),
+    ]);
+
+    res.json({ products, total, page, limit });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * PATCH /api/admin/products/:id — toggle visibility (soft delete).
+ *
+ * We don't hard-delete because orders may reference the product. Toggling
+ * isActive=false hides it from customer browse and any new add-to-cart, but
+ * existing orders retain their snapshot data.
+ */
+router.patch('/products/:id', async (req, res, next) => {
+  try {
+    const data = validateBody(req, z.object({ isActive: z.boolean() }));
+    const product = await Product.findByIdAndUpdate(
+      req.params.id,
+      { $set: { isActive: data.isActive } },
+      { new: true }
+    );
+    if (!product) throw new HttpError(404, 'Product not found');
+    res.json({ product });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ============================================================
+// PHASE 7c — Delivery partner doc verification
+// ============================================================
+
+/**
+ * GET /api/admin/delivery-partners?verified=
+ *
+ * List delivery partners with their submitted documents for review.
+ * `verified` filter: 'true' / 'false' / 'pending' (any partner with at least
+ * one document URL but verified=false).
+ */
+router.get('/delivery-partners', async (req, res, next) => {
+  try {
+    const v = String(req.query.verified || '');
+
+    const filter = {};
+    if (v === 'true') filter['documents.verified'] = true;
+    else if (v === 'false') filter['documents.verified'] = { $ne: true };
+    else if (v === 'pending') {
+      filter['documents.verified'] = { $ne: true };
+      filter.$or = [
+        { 'documents.drivingLicenseUrl': { $exists: true, $ne: '' } },
+        { 'documents.aadhaarUrl': { $exists: true, $ne: '' } },
+        { 'documents.vehicleRcUrl': { $exists: true, $ne: '' } },
+      ];
+    }
+
+    const partners = await DeliveryProfile.find(filter)
+      .populate('user', 'name email phone')
+      .sort({ updatedAt: -1 })
+      .limit(100)
+      .lean();
+    res.json({ partners });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * PATCH /api/admin/delivery-partners/:userId/verify
+ *
+ * Flip documents.verified. We don't keep history beyond the timestamp; if
+ * we ever need a revocation audit, add a verifiedAt + verifiedBy field.
+ */
+router.patch('/delivery-partners/:userId/verify', async (req, res, next) => {
+  try {
+    const data = validateBody(req, z.object({ verified: z.boolean() }));
+    const profile = await DeliveryProfile.findOneAndUpdate(
+      { user: req.params.userId },
+      { $set: { 'documents.verified': data.verified } },
+      { new: true }
+    ).populate('user', 'name email phone');
+    if (!profile) throw new HttpError(404, 'Delivery partner not found');
+    res.json({ profile });
   } catch (err) {
     next(err);
   }
