@@ -84,12 +84,51 @@ router.get('/', optionalAuth, async (req, res, next) => {
 });
 
 /**
- * GET /api/shops/categories — list all active categories
+ * GET /api/shops/categories — list all active categories.
+ *
+ * 8b: pass `?tree=true` to get a nested response:
+ *   { categories: [{ ...parent, children: [...] }] }
+ *
+ * Default (no tree param) returns a flat list for backward compatibility
+ * with anything that hasn't migrated yet.
  */
-router.get('/categories', async (_req, res, next) => {
+router.get('/categories', async (req, res, next) => {
   try {
-    const categories = await Category.find({ isActive: true }).sort({ sortOrder: 1 }).lean();
-    res.json({ categories });
+    const all = await Category.find({ isActive: true })
+      .sort({ sortOrder: 1, name: 1 })
+      .lean();
+
+    if (req.query.tree !== 'true') {
+      return res.json({ categories: all });
+    }
+
+    // Build the tree: parents (parent=null) get a children[] array of
+    // categories that reference them.
+    const byParent = new Map();
+    for (const c of all) {
+      const key = c.parent ? String(c.parent) : null;
+      if (!byParent.has(key)) byParent.set(key, []);
+      byParent.get(key).push(c);
+    }
+    const tops = byParent.get(null) || [];
+    const tree = tops.map((p) => ({
+      ...p,
+      children: byParent.get(String(p._id)) || [],
+    }));
+    // Orphans (parent points to an inactive/missing category) — surface
+    // them at the top level so they're still findable; otherwise they'd
+    // silently disappear from the UI.
+    const knownTopIds = new Set(tops.map((t) => String(t._id)));
+    const orphans = [];
+    for (const [parentKey, list] of byParent.entries()) {
+      if (parentKey === null) continue;
+      if (!knownTopIds.has(parentKey)) {
+        // Their parent doesn't exist in the active set
+        for (const c of list) orphans.push({ ...c, children: [] });
+      }
+    }
+
+    res.json({ categories: [...tree, ...orphans] });
   } catch (err) {
     next(err);
   }
@@ -432,4 +471,3 @@ router.delete(
 );
 
 export default router;
-  
