@@ -2,7 +2,7 @@ import { Router } from 'express';
 import crypto from 'node:crypto';
 import { z } from 'zod';
 
-import { Shop, Product, Category } from '../models/index.js';
+import { Shop, Product, Category, ProductTemplate } from '../models/index.js';
 import { optionalAuth, requireAuth } from '../middleware/auth.js';
 import { requireRole } from '../middleware/role.js';
 import { validateBody } from '../utils/validate.js';
@@ -407,6 +407,101 @@ router.post(
 const productUpdateSchema = productSchema.partial().extend({
   isActive: z.boolean().optional(),
 });
+
+// ============================================================
+// PHASE 8d — Clone from product templates
+// ============================================================
+
+const bulkCloneSchema = z.object({
+  items: z
+    .array(
+      z.object({
+        templateId: z.string().regex(/^[a-f0-9]{24}$/i),
+        // Optional overrides — fall back to template values if omitted.
+        price: z.number().nonnegative().optional(),
+        stock: z.number().int().min(0).optional(),
+      })
+    )
+    .min(1)
+    .max(200),
+});
+
+/**
+ * POST /api/shops/:id/products/from-templates — bulk-clone templates into shop.
+ *
+ * Body: { items: [{ templateId, price?, stock? }] }
+ *
+ * For each item we look up the template, then create a Product owned by the
+ * shop with template values + caller overrides. Duplicates (same template
+ * already cloned into this shop) are skipped — we identify by name match
+ * within the shop. The response includes counts of created vs skipped.
+ *
+ * Not transactional — if 50 out of 100 inserts succeed and then the DB
+ * connection drops, the first 50 stick. Acceptable for a non-critical
+ * convenience feature; user can re-click and the dedupe will skip the
+ * already-created ones.
+ */
+router.post(
+  '/:id/products/from-templates',
+  requireAuth,
+  requireRole('shop'),
+  async (req, res, next) => {
+    try {
+      const data = validateBody(req, bulkCloneSchema);
+      const shop = await assertShopOwner(req, req.params.id);
+
+      const templateIds = data.items.map((i) => i.templateId);
+      const templates = await ProductTemplate.find({
+        _id: { $in: templateIds },
+        isActive: true,
+      }).lean();
+      const tplById = new Map(templates.map((t) => [String(t._id), t]));
+
+      // Avoid duplicates by checking existing product names in this shop.
+      const existing = await Product.find({ shop: shop._id })
+        .select('name')
+        .lean();
+      const existingNames = new Set(existing.map((p) => p.name.toLowerCase()));
+
+      const toCreate = [];
+      const skipped = [];
+      for (const item of data.items) {
+        const tpl = tplById.get(item.templateId);
+        if (!tpl) {
+          skipped.push({ templateId: item.templateId, reason: 'template not found' });
+          continue;
+        }
+        if (existingNames.has(tpl.name.toLowerCase())) {
+          skipped.push({ templateId: item.templateId, reason: 'product with same name already in shop' });
+          continue;
+        }
+        const stock = typeof item.stock === 'number' ? item.stock : 0;
+        toCreate.push({
+          shop: shop._id,
+          shopEmail: shop.ownerEmail,
+          name: tpl.name,
+          description: '',
+          image: tpl.image || undefined,
+          category: tpl.category || undefined,
+          price: typeof item.price === 'number' ? item.price : tpl.suggestedPrice,
+          stock,
+          inStock: stock > 0,
+          weight: tpl.weight || '',
+          isActive: true,
+        });
+      }
+
+      const created = toCreate.length > 0 ? await Product.insertMany(toCreate) : [];
+      res.status(201).json({
+        created: created.length,
+        createdProducts: created,
+        skipped,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 
 /**
  * PATCH /api/shops/:id/products/:productId
