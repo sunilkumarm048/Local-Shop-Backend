@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 
-import { User, Shop, Order, Category, PricingConfig, WithdrawRequest, DeliveryProfile, Product } from '../models/index.js';
+import { User, Shop, Order, Category, PricingConfig, WithdrawRequest, DeliveryProfile, Product, ProductTemplate } from '../models/index.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireRole } from '../middleware/role.js';
 import { validateBody } from '../utils/validate.js';
@@ -661,6 +661,83 @@ router.patch('/delivery-partners/:userId/verify', async (req, res, next) => {
     ).populate('user', 'name email phone');
     if (!profile) throw new HttpError(404, 'Delivery partner not found');
     res.json({ profile });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ============================================================
+// PHASE 8d — Product templates (catalog library)
+// ============================================================
+
+const templateSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  weight: z.string().trim().max(40).optional().or(z.literal('')),
+  suggestedPrice: z.number().nonnegative().max(1_000_000),
+  group: z.string().trim().min(1).max(40),
+  category: z.string().regex(/^[a-f0-9]{24}$/i).nullable().optional(),
+  image: z.string().url().optional().or(z.literal('')),
+  sortOrder: z.number().int().optional(),
+  isActive: z.boolean().optional(),
+});
+
+router.get('/templates', async (_req, res, next) => {
+  try {
+    const templates = await ProductTemplate.find({})
+      .populate('category', 'name')
+      .sort({ group: 1, sortOrder: 1, name: 1 })
+      .lean();
+    res.json({ templates });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/templates', async (req, res, next) => {
+  try {
+    const data = validateBody(req, templateSchema);
+    const tpl = await ProductTemplate.create({
+      name: data.name,
+      weight: data.weight || '',
+      suggestedPrice: data.suggestedPrice,
+      group: data.group,
+      category: data.category || null,
+      image: data.image || '',
+      sortOrder: data.sortOrder ?? 0,
+      isActive: data.isActive ?? true,
+    });
+    res.status(201).json({ template: tpl });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.patch('/templates/:id', async (req, res, next) => {
+  try {
+    const data = validateBody(req, templateSchema.partial());
+    const update = {};
+    for (const key of ['name', 'weight', 'suggestedPrice', 'group', 'image', 'sortOrder', 'isActive']) {
+      if (data[key] !== undefined) update[key] = data[key];
+    }
+    if (data.category !== undefined) update.category = data.category || null;
+
+    const tpl = await ProductTemplate.findByIdAndUpdate(
+      req.params.id,
+      { $set: update },
+      { new: true }
+    );
+    if (!tpl) throw new HttpError(404, 'Template not found');
+    res.json({ template: tpl });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.delete('/templates/:id', async (req, res, next) => {
+  try {
+    const tpl = await ProductTemplate.findByIdAndDelete(req.params.id);
+    if (!tpl) throw new HttpError(404, 'Template not found');
+    res.json({ ok: true });
   } catch (err) {
     next(err);
   }
