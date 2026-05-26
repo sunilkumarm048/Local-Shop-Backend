@@ -1,9 +1,20 @@
 import mongoose from 'mongoose';
 
 /**
- * Category = product/shop category (Bakery, Grocery, Pharmacy, etc).
- * In the old Firestore schema this lived in `shops` (confusing — but that's
- * what `allCategories = catSnap.docs.map(d=>d.data())` was reading).
+ * Category = shop / product category.
+ *
+ * 8b: now supports a single level of nesting via `parent`. Top-level groups
+ * (Food & Daily Need, Household, etc.) have `parent = null`. Leaves point
+ * to their parent. We deliberately limit to one level — multi-level
+ * hierarchies in marketplaces almost always end up confusing and rarely
+ * help users. If you genuinely need deeper nesting later, it's a small
+ * change (just relax the parent depth check).
+ *
+ * The unique index on `name` is global (not scoped to parent), so you can't
+ * have two "Bakery" categories under different parents. This is intentional —
+ * shop owners type the category name, and two different "Bakery"s would be
+ * confusing. If two parents need a child of the same conceptual name, prefix
+ * the parent (e.g. "Bakery (Food)" vs "Bakery (Industrial)").
  */
 const categorySchema = new mongoose.Schema(
   {
@@ -12,6 +23,13 @@ const categorySchema = new mongoose.Schema(
     image: String,
     sortOrder: { type: Number, default: 0 },
     isActive: { type: Boolean, default: true },
+    // 8b: nesting. null for top-level groups, ObjectId for children.
+    parent: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Category',
+      default: null,
+      index: true,
+    },
   },
   { timestamps: true }
 );
