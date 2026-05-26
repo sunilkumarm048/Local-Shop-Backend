@@ -8,6 +8,7 @@ import quotes from './quotes.js';
 import delivery from './delivery.js';
 import admin from './admin.js';
 import transport from './transport.js';
+import templates from './templates.js';
 
 const router = Router();
 
@@ -20,9 +21,10 @@ router.use('/quotes', quotes);
 router.use('/delivery', delivery);
 router.use('/admin', admin);
 router.use('/transport', transport);
+router.use('/templates', templates);
 
 router.get('/', (_req, res) => {
-  res.json({ name: 'local-shop-api', version: '0.12.0' });
+  res.json({ name: 'local-shop-api', version: '0.13.0' });
 });
 
 export default router;
