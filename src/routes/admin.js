@@ -271,7 +271,10 @@ router.get('/orders', async (req, res, next) => {
  */
 router.get('/categories', async (_req, res, next) => {
   try {
-    const categories = await Category.find({}).sort({ sortOrder: 1, name: 1 }).lean();
+    const categories = await Category.find({})
+      .populate('parent', 'name')
+      .sort({ sortOrder: 1, name: 1 })
+      .lean();
     res.json({ categories });
   } catch (err) {
     next(err);
@@ -284,19 +287,37 @@ const categorySchema = z.object({
   image: z.string().url().optional().or(z.literal('')),
   sortOrder: z.number().int().optional(),
   isActive: z.boolean().optional(),
+  // 8b: optional parent — null/omitted means top-level group.
+  // ObjectId shape validated here; existence + non-circular checked in handler.
+  parent: z.string().regex(/^[a-f0-9]{24}$/i).nullable().optional(),
 });
+
+/** Ensure the chosen parent exists and is itself top-level (one-level limit). */
+async function assertValidParent(parentId, selfId = null) {
+  if (parentId == null) return; // null/omitted is fine
+  if (selfId && parentId === String(selfId)) {
+    throw new HttpError(400, 'A category cannot be its own parent');
+  }
+  const p = await Category.findById(parentId).select('parent').lean();
+  if (!p) throw new HttpError(400, 'Parent category does not exist');
+  if (p.parent) {
+    throw new HttpError(400, 'Parent must itself be a top-level category (only one level of nesting allowed)');
+  }
+}
 
 router.post('/categories', async (req, res, next) => {
   try {
     const data = validateBody(req, categorySchema);
     const existing = await Category.findOne({ name: data.name });
     if (existing) throw new HttpError(409, 'A category with that name already exists');
+    await assertValidParent(data.parent);
     const category = await Category.create({
       name: data.name,
       icon: data.icon || undefined,
       image: data.image || undefined,
       sortOrder: data.sortOrder ?? 0,
       isActive: data.isActive ?? true,
+      parent: data.parent || null,
     });
     res.status(201).json({ category });
   } catch (err) {
@@ -313,6 +334,10 @@ router.patch('/categories/:id', async (req, res, next) => {
     if (data.image !== undefined) update.image = data.image || undefined;
     if (data.sortOrder !== undefined) update.sortOrder = data.sortOrder;
     if (data.isActive !== undefined) update.isActive = data.isActive;
+    if (data.parent !== undefined) {
+      await assertValidParent(data.parent, req.params.id);
+      update.parent = data.parent || null;
+    }
     const category = await Category.findByIdAndUpdate(req.params.id, { $set: update }, { new: true });
     if (!category) throw new HttpError(404, 'Category not found');
     res.json({ category });
