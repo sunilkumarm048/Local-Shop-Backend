@@ -37,3 +37,4 @@ const productTemplateSchema = new mongoose.Schema(
 productTemplateSchema.index({ group: 1, isActive: 1, sortOrder: 1 });
 
 export default mongoose.model('ProductTemplate', productTemplateSchema);
+  
