@@ -44,3 +44,4 @@ router.get('/', optionalAuth, async (req, res, next) => {
 });
 
 export default router;
+  
