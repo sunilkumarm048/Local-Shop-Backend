@@ -24,7 +24,7 @@ router.use('/transport', transport);
 router.use('/templates', templates);
 
 router.get('/', (_req, res) => {
-  res.json({ name: 'local-shop-api', version: '0.13.0' });
+  res.json({ name: 'local-shop-api', version: '0.14.0' });
 });
 
 export default router;
