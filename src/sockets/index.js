@@ -15,6 +15,7 @@ import { Shop } from '../models/index.js';
  *   shop:<shopId>          new orders, status updates for a shop owner
  *   order:<orderId>        live tracking — joined by customer + delivery + shop
  *   delivery:available     all online delivery partners (job broadcast)
+ *   admins                 all connected admins (platform-wide alerts)
  */
 export function initSockets(httpServer) {
   const io = new SocketIOServer(httpServer, {
@@ -45,6 +46,13 @@ export function initSockets(httpServer) {
     // Auto-join personal room — everything addressed to a user lands here.
     socket.join(`user:${socket.userId}`);
     console.log(`[socket] connected user:${socket.userId} (${socket.id})`);
+
+    // Admin role auto-joins the global `admins` room so platform-wide
+    // notifications (new shop registrations, doc verification requests,
+    // suspicious activity, etc.) reach them live.
+    if (socket.roles?.includes('admin')) {
+      socket.join('admins');
+    }
 
     // Shop owners auto-join their shop room(s) so order:new / order:status_update
     // events from the API land in their dashboard live.
