@@ -212,6 +212,13 @@ router.post('/', requireAuth, requireRole('shop'), async (req, res, next) => {
     if (io) {
       const sockets = await io.in(`user:${req.user._id}`).fetchSockets();
       for (const s of sockets) s.join(`shop:${shop._id}`);
+
+      // Phase 9: notify admins that a new shop needs approval.
+      // Lands as an in-page toast + sound on any logged-in admin's screen.
+      io.to('admins').emit('admin:new_shop', {
+        shopId: shop._id.toString(),
+        name: shop.name,
+      });
     }
 
     res.status(201).json({ shop });
