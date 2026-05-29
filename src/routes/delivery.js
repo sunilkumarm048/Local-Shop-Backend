@@ -8,6 +8,7 @@ import { validateBody } from '../utils/validate.js';
 import { HttpError } from '../middleware/error.js';
 import { distanceKm } from '../services/pricing.js';
 import { deliveryAnalytics } from '../services/analytics.js';
+import { sendPushToUser } from '../services/push.js';
 
 const router = Router();
 
@@ -63,6 +64,36 @@ function emitStatusUpdate(req, order) {
   };
   io.to(`shop:${order.shop}`).emit('order:status_update', payload);
   io.to(`order:${order._id}`).emit('order:status_update', payload);
+
+  // Push to customer when delivery actions change status (out_for_delivery,
+  // delivered, etc). Fire-and-forget; push failures never block the request.
+  if (order.customer) {
+    const titleMap = {
+      out_for_delivery: 'On the way',
+      delivered: 'Delivered \u2705',
+    };
+    const bodyMap = {
+      out_for_delivery: 'Your delivery partner is on the way \u2014 tap to track.',
+      delivered: 'Your order has been delivered. Thanks for shopping local!',
+    };
+    const title = titleMap[order.status] || 'Order update';
+    const body = bodyMap[order.status] || 'There\u2019s an update on your order.';
+
+    (async () => {
+      try {
+        await sendPushToUser(order.customer, {
+          title,
+          body,
+          tag: `order:${order._id}`,
+          url: `/orders/${order._id}`,
+          orderId: order._id.toString(),
+        });
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('[push] delivery status push to customer failed:', err.message);
+      }
+    })();
+  }
 }
 
 // ============================================================
