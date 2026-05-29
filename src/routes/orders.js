@@ -8,6 +8,7 @@ import { requireRole } from '../middleware/role.js';
 import { validateBody } from '../utils/validate.js';
 import { calculateOrderTotals, distanceKm } from '../services/pricing.js';
 import { createRazorpayOrder } from '../services/razorpay.js';
+import { sendPushToUser } from '../services/push.js';
 import { HttpError } from '../middleware/error.js';
 
 const router = Router();
@@ -180,6 +181,27 @@ router.post('/checkout', requireAuth, async (req, res, next) => {
       const io = req.app.get('io');
       for (const order of createdOrders) {
         io.to(`shop:${order.shop}`).emit('order:new', { orderId: order._id.toString() });
+
+        // PHASE 8h: also fire web push so the owner is alerted even if their
+        // dashboard tab is closed / phone is asleep. Look up the shop's owner;
+        // fire-and-forget so failures here never block checkout.
+        (async () => {
+          try {
+            const shop = await Shop.findById(order.shop).select('owner name').lean();
+            if (shop?.owner) {
+              await sendPushToUser(shop.owner, {
+                title: 'New order',
+                body: `New order at ${shop.name || 'your shop'} — \u20B9${order.total}`,
+                tag: `order:${order._id}`,
+                url: '/shop',
+                orderId: order._id.toString(),
+              });
+            }
+          } catch (err) {
+            // eslint-disable-next-line no-console
+            console.warn('[push] order:new push failed (non-blocking):', err.message);
+          }
+        })();
       }
     }
 
@@ -262,6 +284,10 @@ async function assertOrderShopOwner(req, orderId) {
  * Emit a status-change event to everyone who cares about this order.
  * - shop:<shopId>  → the owner's dashboard + other devices
  * - order:<orderId> → the customer's tracking page (and later, delivery)
+ *
+ * Also fires a push to the customer so they're alerted even with the app
+ * closed (their tracking page won't help much if their phone is in their
+ * pocket). Fire-and-forget; failures here never block the status change.
  */
 function emitStatusUpdate(req, order) {
   const io = req.app.get('io');
@@ -275,6 +301,51 @@ function emitStatusUpdate(req, order) {
   };
   io.to(`shop:${order.shop}`).emit('order:status_update', payload);
   io.to(`order:${order._id}`).emit('order:status_update', payload);
+
+  // Push to customer
+  if (order.customer) {
+    (async () => {
+      try {
+        await sendPushToUser(order.customer, {
+          title: customerPushTitle(order.status),
+          body: customerPushBody(order.status),
+          tag: `order:${order._id}`,
+          url: `/orders/${order._id}`,
+          orderId: order._id.toString(),
+        });
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('[push] order status push to customer failed:', err.message);
+      }
+    })();
+  }
+}
+
+/** Friendly status-change copy for customer push notifications. */
+function customerPushTitle(status) {
+  switch (status) {
+    case 'accepted': return 'Order accepted';
+    case 'preparing': return 'Your order is being prepared';
+    case 'ready_for_pickup': return 'Order ready for pickup';
+    case 'out_for_delivery': return 'On the way';
+    case 'delivered': return 'Delivered \u2705';
+    case 'cancelled': return 'Order cancelled';
+    case 'rejected': return 'Order rejected';
+    default: return 'Order update';
+  }
+}
+
+function customerPushBody(status) {
+  switch (status) {
+    case 'accepted': return 'The shop has accepted your order.';
+    case 'preparing': return 'The shop is preparing your items now.';
+    case 'ready_for_pickup': return 'Your order is ready and waiting for a delivery partner.';
+    case 'out_for_delivery': return 'Your delivery partner is on the way \u2014 tap to track.';
+    case 'delivered': return 'Your order has been delivered. Thanks for shopping local!';
+    case 'cancelled': return 'Your order was cancelled. Tap for details.';
+    case 'rejected': return 'The shop couldn\u2019t accept your order. Tap for details.';
+    default: return 'There\u2019s an update on your order.';
+  }
 }
 
 /**
