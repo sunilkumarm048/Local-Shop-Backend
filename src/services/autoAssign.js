@@ -1,4 +1,5 @@
 import { Order, Shop, TransportOrder, DeliveryProfile } from '../models/index.js';
+import { sendPushToUser } from './push.js';
 
 /**
  * PHASE 5b — Auto-assign idle pickups (grocery orders).
@@ -113,6 +114,23 @@ async function assignGroceryOne(io, order) {
   io.to(`user:${partner.user}`).emit('job:assigned', {
     orderId: claimed._id.toString(),
   });
+
+  // Web Push so the partner is alerted even when the app is closed.
+  // Fire-and-forget — never block the assignment on push delivery.
+  (async () => {
+    try {
+      await sendPushToUser(partner.user, {
+        title: 'New delivery job',
+        body: `Pickup from ${shop.name || 'a shop'} \u2014 tap to view`,
+        tag: `job:${claimed._id}`,
+        url: '/delivery',
+        orderId: claimed._id.toString(),
+      });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn('[push] grocery job:assigned push failed:', err.message);
+    }
+  })();
 }
 
 // ============================================================
@@ -195,5 +213,21 @@ async function assignTransportOne(io, order) {
     orderId: claimed._id.toString(),
     kind: 'transport',
   });
+
+  // Web Push for offline partners.
+  (async () => {
+    try {
+      await sendPushToUser(partner.user, {
+        title: 'New transport job',
+        body: 'A transport booking just landed in your area \u2014 tap to view',
+        tag: `transport:${claimed._id}`,
+        url: '/delivery',
+        orderId: claimed._id.toString(),
+      });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn('[push] transport job:assigned push failed:', err.message);
+    }
+  })();
 }
   
