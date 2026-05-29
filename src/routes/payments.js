@@ -1,10 +1,11 @@
 import { Router } from 'express';
 import { z } from 'zod';
 
-import { Order } from '../models/index.js';
+import { Order, Shop } from '../models/index.js';
 import { requireAuth } from '../middleware/auth.js';
 import { validateBody } from '../utils/validate.js';
 import { verifyPaymentSignature, verifyWebhookSignature } from '../services/razorpay.js';
+import { sendPushToUser } from '../services/push.js';
 import { HttpError } from '../middleware/error.js';
 
 const router = Router();
@@ -61,6 +62,25 @@ router.post('/verify', requireAuth, async (req, res, next) => {
     const io = req.app.get('io');
     for (const order of orders) {
       io.to(`shop:${order.shop}`).emit('order:new', { orderId: order._id.toString() });
+
+      // PHASE 8h: also send push for offline owners
+      (async () => {
+        try {
+          const shop = await Shop.findById(order.shop).select('owner name').lean();
+          if (shop?.owner) {
+            await sendPushToUser(shop.owner, {
+              title: 'New order',
+              body: `New order at ${shop.name || 'your shop'} — \u20B9${order.total}`,
+              tag: `order:${order._id}`,
+              url: '/shop',
+              orderId: order._id.toString(),
+            });
+          }
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.warn('[push] payment-verify push failed (non-blocking):', err.message);
+        }
+      })();
     }
 
     res.json({ ok: true, count: orders.length });
