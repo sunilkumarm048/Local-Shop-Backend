@@ -18,6 +18,12 @@ const schema = z.object({
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),
   GOOGLE_MAPS_API_KEY: z.string().optional(),
+  // Web Push (VAPID). Generate once with: npx web-push generate-vapid-keys
+  // Leave unset to disable push cleanly — the app still works, it just won't
+  // send browser notifications (in-app socket toasts are unaffected).
+  VAPID_PUBLIC_KEY: z.string().optional(),
+  VAPID_PRIVATE_KEY: z.string().optional(),
+  VAPID_SUBJECT: z.string().optional(), // e.g. mailto:you@example.com
   // PHASE 6a: comma-separated allowlist. Any user whose email is in here is
   // auto-granted the 'admin' role on login. The easiest way to bootstrap your
   // first admin without writing a MongoDB script.
