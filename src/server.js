@@ -4,6 +4,7 @@ import { connectDB } from './config/db.js';
 import { createApp } from './app.js';
 import { initSockets } from './sockets/index.js';
 import { startAutoAssign } from './services/autoAssign.js';
+import { setPushIO } from './services/push.js';
 
 async function start() {
   await connectDB();
@@ -14,6 +15,10 @@ async function start() {
 
   // Make io accessible to route handlers via app.get('io')
   app.set('io', io);
+
+  // Give the push service the io instance so sendPushToUser() can emit
+  // in-app socket notifications (it's called from routes that don't receive io).
+  setPushIO(io);
 
   httpServer.listen(env.PORT, () => {
     console.log(`[server] listening on http://localhost:${env.PORT}`);
