@@ -54,6 +54,11 @@ const shopSchema = new mongoose.Schema(
     rating: { type: Number, default: 0, min: 0, max: 5 },
     ratingCount: { type: Number, default: 0 },
 
+    // Owner-curated photo gallery (Cloudinary CDN URLs) shown on the shop
+    // detail page to attract customers. Distinct from review photos, which
+    // live on the Review documents.
+    gallery: { type: [String], default: [] },
+
     isApproved: { type: Boolean, default: false }, // admin approves new shops
     isBlocked: { type: Boolean, default: false },
   },
