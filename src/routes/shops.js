@@ -310,6 +310,32 @@ const updateShopSchema = createShopSchema.partial().extend({
   isOpen: z.boolean().optional(),
 });
 
+const gallerySchema = z.object({
+  gallery: z.array(z.string().url()).max(12),
+});
+
+/**
+ * PUT /api/shops/:id/gallery — owner replaces their shop's photo gallery.
+ * Send the full desired array (add/remove/reorder handled client-side).
+ * Capped at 12 images.
+ */
+router.put(
+  '/:id/gallery',
+  requireAuth,
+  requireRole('shop'),
+  async (req, res, next) => {
+    try {
+      const data = validateBody(req, gallerySchema);
+      const shop = await assertShopOwner(req, req.params.id);
+      shop.gallery = data.gallery;
+      await shop.save();
+      res.json({ shop });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 /**
  * PATCH /api/shops/:id — owner edits their own shop
  */
