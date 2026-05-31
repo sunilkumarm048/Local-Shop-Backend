@@ -8,6 +8,7 @@ import { requireRole } from '../middleware/role.js';
 import { validateBody } from '../utils/validate.js';
 import { calculateOrderTotals, distanceKm } from '../services/pricing.js';
 import { createRazorpayOrder } from '../services/razorpay.js';
+import { decrementStock } from '../services/inventory.js';
 import { sendPushToUser } from '../services/push.js';
 import { HttpError } from '../middleware/error.js';
 
@@ -176,6 +177,22 @@ router.post('/checkout', requireAuth, async (req, res, next) => {
         }
       );
       paymentBlock = { method: 'cod' };
+
+      // Decrement tracked stock now that the order is confirmed. Atomic +
+      // guarded inside the helper. The order is already placed, so we don't
+      // fail the request if a rare race leaves a shortfall — we log it for the
+      // shop to reconcile (better than rejecting an order the customer thinks
+      // succeeded). The up-front check above catches the normal case.
+      for (const order of createdOrders) {
+        const { ok, failed } = await decrementStock(order.items);
+        if (!ok) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[inventory] COD order ${order._id} oversold products:`,
+            failed.join(', ')
+          );
+        }
+      }
 
       // Notify shops
       const io = req.app.get('io');
