@@ -5,6 +5,7 @@ import { Order, Shop } from '../models/index.js';
 import { requireAuth } from '../middleware/auth.js';
 import { validateBody } from '../utils/validate.js';
 import { verifyPaymentSignature, verifyWebhookSignature } from '../services/razorpay.js';
+import { decrementStock } from '../services/inventory.js';
 import { sendPushToUser } from '../services/push.js';
 import { HttpError } from '../middleware/error.js';
 
@@ -42,6 +43,11 @@ router.post('/verify', requireAuth, async (req, res, next) => {
     });
     if (orders.length === 0) throw new HttpError(404, 'Orders not found');
 
+    // Capture which orders are transitioning from pending_payment NOW, so we
+    // decrement stock exactly once even if /verify is called twice or the
+    // webhook races this. Orders already 'placed'/paid are skipped.
+    const transitioning = orders.filter((o) => o.status === 'pending_payment');
+
     const now = new Date();
     await Order.updateMany(
       { 'payment.razorpayOrderId': data.razorpayOrderId, customer: req.user._id },
@@ -57,6 +63,20 @@ router.post('/verify', requireAuth, async (req, res, next) => {
         $push: { statusHistory: { status: 'placed', by: req.user._id } },
       }
     );
+
+    // Decrement tracked stock for newly-confirmed orders only. Best-effort:
+    // payment already succeeded, so a rare shortfall is logged for the shop to
+    // reconcile rather than failing the paid order.
+    for (const order of transitioning) {
+      const { ok, failed } = await decrementStock(order.items);
+      if (!ok) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[inventory] paid order ${order._id} oversold products:`,
+          failed.join(', ')
+        );
+      }
+    }
 
     // Emit to each shop's room so their dashboard updates live
     const io = req.app.get('io');
