@@ -66,16 +66,39 @@ export async function registerWithEmail({ name, email, password, phone, role = '
   }
 
   const existing = await User.findOne({ email: email.toLowerCase() });
-  if (existing) throw new HttpError(409, 'Email already registered');
+  if (existing) throw new HttpError(409, 'This email is already registered. Try logging in instead.');
 
-  const user = await User.create({
-    name,
-    email: email.toLowerCase(),
-    phone,
-    passwordHash: await hashPassword(password),
-    roles: [role],
-    lastLoginAt: new Date(),
-  });
+  // Phone is also unique. Check it up front so we can return a clear message
+  // rather than letting MongoDB throw a raw duplicate-key error (which would
+  // surface to the user as a generic 500).
+  if (phone) {
+    const phoneTaken = await User.findOne({ phone });
+    if (phoneTaken) {
+      throw new HttpError(409, 'This phone number is already registered. Try logging in instead.');
+    }
+  }
+
+  let user;
+  try {
+    user = await User.create({
+      name,
+      email: email.toLowerCase(),
+      phone,
+      passwordHash: await hashPassword(password),
+      roles: [role],
+      lastLoginAt: new Date(),
+    });
+  } catch (err) {
+    // Safety net for the race where two requests pass the checks above at the
+    // same time, or any other unique-field collision. Turn Mongo's 11000 into
+    // a clear 409 instead of a 500.
+    if (err?.code === 11000) {
+      const field = Object.keys(err.keyPattern || {})[0];
+      const label = field === 'phone' ? 'phone number' : 'email';
+      throw new HttpError(409, `This ${label} is already registered. Try logging in instead.`);
+    }
+    throw err;
+  }
 
   // Auto-create the role-specific profile where needed
   if (role === 'delivery') {
