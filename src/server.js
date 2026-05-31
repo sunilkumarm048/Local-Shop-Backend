@@ -4,6 +4,7 @@ import { connectDB } from './config/db.js';
 import { createApp } from './app.js';
 import { initSockets } from './sockets/index.js';
 import { startAutoAssign } from './services/autoAssign.js';
+import { startPendingOrderCleanup } from './services/pendingCleanup.js';
 import { setPushIO } from './services/push.js';
 
 async function start() {
@@ -29,6 +30,7 @@ async function start() {
   // Phase 5b — background worker that auto-assigns idle pickups to the
   // nearest online partner. No-op when nothing matches.
   startAutoAssign(io);
+  startPendingOrderCleanup();
 
   // Graceful shutdown
   const shutdown = async (signal) => {
