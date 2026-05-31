@@ -206,22 +206,30 @@ router.post('/', requireAuth, requireRole('shop'), async (req, res, next) => {
       isApproved: false, // Phase 6a — gated by admin approval
     });
 
-    // Live-join the owner's socket(s) to this shop's room so they receive
-    // order events without waiting for a reconnect.
-    const io = req.app.get('io');
-    if (io) {
-      const sockets = await io.in(`user:${req.user._id}`).fetchSockets();
-      for (const s of sockets) s.join(`shop:${shop._id}`);
-
-      // Phase 9: notify admins that a new shop needs approval.
-      // Lands as an in-page toast + sound on any logged-in admin's screen.
-      io.to('admins').emit('admin:new_shop', {
-        shopId: shop._id.toString(),
-        name: shop.name,
-      });
-    }
-
+    // Respond immediately — the shop is saved. Socket side-effects below are
+    // best-effort and must NEVER block or delay the HTTP response. (A slow or
+    // disconnected Socket.io/Redis adapter on fetchSockets() was leaving the
+    // create request hanging, so the client spinner never stopped even though
+    // the shop was created.)
     res.status(201).json({ shop });
+
+    // Fire-and-forget: live-join the owner's socket(s) to this shop's room and
+    // notify admins. Wrapped so any failure here is logged, not thrown.
+    (async () => {
+      try {
+        const io = req.app.get('io');
+        if (!io) return;
+        const sockets = await io.in(`user:${req.user._id}`).fetchSockets();
+        for (const s of sockets) s.join(`shop:${shop._id}`);
+        io.to('admins').emit('admin:new_shop', {
+          shopId: shop._id.toString(),
+          name: shop.name,
+        });
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('[shops] post-create socket side-effect failed (non-blocking):', err.message);
+      }
+    })();
   } catch (err) {
     next(err);
   }
@@ -599,4 +607,3 @@ router.delete(
 );
 
 export default router;
-  
