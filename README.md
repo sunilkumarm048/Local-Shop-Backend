@@ -1,112 +1,181 @@
-# local-shop-api
+# Local Shop — Backend API
 
-Backend for Local Shop — Express + Socket.IO + MongoDB + Redis.
+REST + real-time API powering **Local Shop**, a hyperlocal commerce platform for
+India: customers order from nearby shops with fast delivery, local **service**
+providers are discoverable "near me," and shop owners, delivery partners, and
+admins each get their own tooling. This repo is the **Node/Express API**. The
+web client lives in a separate frontend repo.
 
-## Stack
-- **Express 4** — REST API
-- **Socket.IO** with Redis adapter — real-time
-- **MongoDB** (via Mongoose) — primary datastore
-- **Redis** — Socket.IO pub/sub, OTP storage, caching, rate-limits
-- **JWT** — stateless auth (issued here, consumed by both API and Socket.IO)
-- **Razorpay** — payments (server-signed orders only)
-- **bcryptjs** — password hashing
-- **zod** — request validation
+> Companion repo: [local-shop-frontend](https://github.com/sunilkumarm048/local-shop-frontend)
 
-## Phase 1–3 status
-- [x] Mongoose schemas for all 9 collections
-- [x] Express app with helmet, CORS, rate-limit, error handler
-- [x] Socket.IO with JWT handshake and Redis adapter
-- [x] Health endpoint at `GET /api/health`
-- [x] **Email + password** signup/login with bcrypt
-- [x] **Phone OTP** (mock provider — easy swap to MSG91/Twilio)
-- [x] JWT issuance + `/auth/me` + role-based middleware
-- [x] **Shops + products** browse endpoints with geo-search
-- [x] **Checkout** flow (single + split-shop carts) with server-side pricing
-- [x] **Razorpay** order creation + signature verification + webhook handler
-- [x] Quote endpoint for live cart totals
-- [ ] Shop/delivery/admin dashboards (Phases 4–6)
+---
 
-## Endpoints
+## ✨ What it does
 
-### Auth
-| Method | Path                       | Auth | What                                          |
-|--------|----------------------------|------|-----------------------------------------------|
-| POST   | `/api/auth/register`       | —    | Email + password signup with role selection  |
-| POST   | `/api/auth/login`          | —    | Email + password login                        |
-| POST   | `/api/auth/otp/send`       | —    | Send OTP to phone (mock: logs to console)    |
-| POST   | `/api/auth/otp/verify`     | —    | Verify OTP, log in or create user             |
-| GET    | `/api/auth/me`             | ✓    | Current user                                  |
-| POST   | `/api/auth/logout`         | ✓    | Logout (client clears token)                 |
+- **Auth & roles** — JWT auth with customer / shop / delivery / admin roles,
+  email+password and Google sign-in, phone OTP via MSG91
+- **Shops & products** — shop onboarding, admin approval, geo ("near me")
+  queries, product catalog, categories & templates
+- **Orders** — cart checkout, multi-shop split orders, COD + Razorpay online
+  payment with server-side signature verification and webhooks
+- **Inventory** — atomic, race-safe stock decrement on order confirmation
+- **Delivery** — delivery-partner profiles, auto-assignment of pickup jobs,
+  wallet, earnings, and withdrawal requests
+- **Transport** — separate vehicle/transport booking flow with quotes
+- **Reviews** — ratings, reviews, and review photos; recomputed shop ratings
+- **Realtime** — Socket.IO (Redis-backed) for live order tracking & events
+- **Notifications** — Web Push (VAPID) with graceful in-app socket fallback
+- **Housekeeping** — background job that cancels abandoned (unpaid) orders
 
-### Shops & products
-| Method | Path                          | Auth | What                                        |
-|--------|-------------------------------|------|---------------------------------------------|
-| GET    | `/api/shops`                  | —    | List shops (geo if `?lng=&lat=`)            |
-| GET    | `/api/shops/categories`       | —    | All active categories                       |
-| GET    | `/api/shops/:id`              | —    | One shop                                    |
-| GET    | `/api/shops/:id/products`     | —    | Products of one shop                        |
+---
 
-### Orders & payments
-| Method | Path                          | Auth | What                                        |
-|--------|-------------------------------|------|---------------------------------------------|
-| POST   | `/api/quotes/order`           | —    | Preview totals (no DB writes)               |
-| GET    | `/api/quotes/pricing-config`  | —    | Current pricing config                      |
-| POST   | `/api/orders/checkout`        | ✓    | Place orders, return Razorpay order id      |
-| GET    | `/api/orders/mine`            | ✓    | My orders                                   |
-| GET    | `/api/orders/:id`             | ✓    | One order (customer/shop/delivery/admin)   |
-| POST   | `/api/payments/verify`        | ✓    | Verify Razorpay signature, mark paid        |
-| POST   | `/api/payments/webhook`       | —    | Razorpay → us (signature-verified)          |
+## 🛠 Tech Stack
 
-## Phone OTP — production swap
-The mock provider is at `src/services/otp.js`. To switch to real SMS, replace
-the `sendSms(phone, code)` function at the bottom of that file. Everything
-else — code generation, Redis storage, rate-limiting, attempt counting —
-stays as-is.
+| Area        | Tech                                          |
+|-------------|-----------------------------------------------|
+| Runtime     | Node.js 20+ (ES Modules)                       |
+| Framework   | Express 4                                      |
+| Database    | MongoDB + Mongoose 8                            |
+| Realtime    | Socket.IO 4 + Redis adapter (ioredis)          |
+| Auth        | JWT (jsonwebtoken) + bcryptjs                   |
+| Validation  | Zod                                            |
+| Payments    | Razorpay (orders, verification, webhooks)      |
+| SMS / OTP   | MSG91                                          |
+| Push        | web-push (VAPID)                               |
+| Security    | helmet, CORS, express-rate-limit               |
 
-```js
-// MSG91 example:
-async function sendSms(phone, code) {
-  await fetch('https://control.msg91.com/api/v5/otp', {
-    method: 'POST',
-    headers: { authkey: process.env.MSG91_AUTH_KEY },
-    body: JSON.stringify({
-      template_id: process.env.MSG91_TEMPLATE_ID,
-      mobile: phone.replace('+', ''),
-      otp: code,
-    }),
-  });
-}
-```
+---
 
-## Razorpay setup
-1. Sign up at razorpay.com (test mode is free)
-2. Dashboard → Settings → API Keys → Generate test key
-3. Put `Key Id` in `RAZORPAY_KEY_ID` and `Key Secret` in `RAZORPAY_KEY_SECRET`
-4. For webhooks (refunds + late captures): Settings → Webhooks → Add endpoint
-   pointing at `https://your-render-url/api/payments/webhook`. Generate a
-   secret and put it in `RAZORPAY_WEBHOOK_SECRET`.
+## 🚀 Getting Started
 
-## Setup
+### Prerequisites
+- Node.js 20+
+- MongoDB (local or MongoDB Atlas)
+- Redis (local or a managed Redis)
+
+### Install & run
 ```bash
+git clone https://github.com/sunilkumarm048/Local-Shop-Backend.git
+cd Local-Shop-Backend
 npm install
-cp .env.example .env       # then edit JWT_SECRET + Razorpay keys
-npm run dev
-curl http://localhost:4000/api/health
+cp .env.example .env     # then fill in the values (see below)
+npm run dev              # starts on http://localhost:4000 (with --watch)
 ```
 
-You'll need MongoDB and Redis running. The quickest way:
+### Scripts
+| Command         | Does                                  |
+|-----------------|---------------------------------------|
+| `npm run dev`   | Start with auto-reload (`node --watch`)|
+| `npm start`     | Start (production)                    |
+| `npm run lint`  | ESLint                                |
+
+---
+
+## 🔑 Environment Variables
+
+Create `.env`:
+
 ```bash
-docker run -d -p 27017:27017 --name mongo mongo
-docker run -d -p 6379:6379 --name redis redis
+# Core
+NODE_ENV=development
+PORT=4000
+MONGODB_URI=mongodb+srv://...            # MongoDB connection string
+REDIS_URL=redis://...                    # Redis for Socket.IO adapter
+CLIENT_ORIGIN=http://localhost:3000      # frontend URL (CORS) — MUST match
+
+# Auth
+JWT_SECRET=your_long_random_secret
+JWT_EXPIRES_IN=7d
+ADMIN_EMAILS=you@example.com             # comma-separated admin emails
+GOOGLE_CLIENT_ID=...                     # optional, for Google sign-in
+GOOGLE_CLIENT_SECRET=...
+
+# Payments (Razorpay)
+RAZORPAY_KEY_ID=...
+RAZORPAY_KEY_SECRET=...
+RAZORPAY_WEBHOOK_SECRET=...
+
+# SMS / OTP (MSG91) — optional
+MSG91_AUTH_KEY=...
+MSG91_TEMPLATE_ID=...
+MSG91_SENDER_ID=...
+
+# Web Push (VAPID) — optional; generate with: npx web-push generate-vapid-keys
+VAPID_PUBLIC_KEY=...
+VAPID_PRIVATE_KEY=...
+VAPID_SUBJECT=mailto:you@example.com
+
+# Maps — optional
+GOOGLE_MAPS_API_KEY=...
 ```
 
-## Production (Render)
-Web Service · Node · `npm install` · `npm start` · all env vars from `.env.example` (point Mongo at Atlas, Redis at Upstash/Redis Cloud).
+Anything marked optional can be left unset — those features disable cleanly
+(e.g. no VAPID keys → push falls back to in-app socket notifications).
 
-## Socket.IO rooms
-| Room                 | Members                              | Used for                          |
-|----------------------|--------------------------------------|-----------------------------------|
-| `user:<userId>`      | one user                             | personal notifications            |
-| `shop:<shopId>`      | shop owner + their staff             | new orders, status changes        |
-| `order:<orderId>`    | customer + shop + delivery partner   | live tracking, status updates     |
-| `delivery:available` | all online delivery partners         | broadcasting new jobs             |
+> ⚠️ Never commit `.env`. Keep all secrets in your host's environment settings.
+
+---
+
+## 🧭 API Overview
+
+Base path: `/api`
+
+| Prefix            | Purpose                                  |
+|-------------------|------------------------------------------|
+| `/auth`           | Register, login, Google, OTP             |
+| `/shops`          | Shops, products, "near me", reviews      |
+| `/orders`         | Cart checkout, order status              |
+| `/payments`       | Razorpay create / verify / webhook       |
+| `/delivery`       | Partner jobs, wallet, withdrawals        |
+| `/transport`      | Vehicle booking                          |
+| `/quotes`         | Delivery/transport quotes                |
+| `/templates`      | Product templates                        |
+| `/notifications`  | Push subscribe / unsubscribe / test      |
+| `/admin`          | Admin management (role-guarded)          |
+| `/health`         | Health check                             |
+
+---
+
+## 📂 Project Structure
+
+```
+src/
+├── config/       # env validation, db, redis
+├── middleware/   # auth, role guards, error handler
+├── models/       # Mongoose schemas (User, Shop, Order, Review, …)
+├── routes/       # Express routers (one per feature area)
+├── services/     # business logic (auth, razorpay, push, inventory,
+│                 #   autoAssign, pendingCleanup, otp, pricing)
+├── sockets/      # Socket.IO setup
+├── utils/        # helpers (validation, etc.)
+├── app.js        # Express app (middleware + routes)
+└── server.js     # boot: db, redis, sockets, background jobs
+```
+
+---
+
+## ☁️ Deployment (Render)
+
+1. Create a Web Service from this repo.
+2. Build: `npm install` · Start: `npm start`.
+3. Add all environment variables above in the Render dashboard.
+4. Set `CLIENT_ORIGIN` to your deployed frontend URL (or CORS will block it).
+5. Provide managed MongoDB (Atlas) and Redis URLs.
+
+On boot you should see the server listening plus the background jobs starting
+(auto-assign and pending-order cleanup).
+
+---
+
+## 🔒 Security Notes
+
+- Payment signatures verified server-side; Razorpay webhook signature checked.
+- Admin routes guarded by role middleware.
+- helmet, locked-down CORS, and rate limiting (tighter on auth) enabled.
+- Passwords hashed with bcrypt; secrets read only from environment.
+
+---
+
+## 📄 License
+
+Add a license of your choice (e.g. MIT) or leave unlicensed if private.
