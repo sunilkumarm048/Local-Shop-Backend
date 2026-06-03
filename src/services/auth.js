@@ -128,6 +128,56 @@ export async function loginWithEmail({ email, password }) {
 }
 
 /**
+ * Admin field-onboarding: create (or reuse) a shop-owner account with an email
+ * + a temporary password the admin sets. The owner is flagged
+ * `mustChangePassword` so they're prompted to set their own password on first
+ * login. Returns the User doc (not public) so the caller can attach a shop.
+ *
+ * If a user with this email already exists, we DON'T overwrite their password
+ * (that would be a takeover risk) — we just ensure they have the 'shop' role
+ * and reuse the account.
+ */
+export async function createShopOwnerAccount({ email, password, name, phone }) {
+  const lower = email.toLowerCase();
+  let user = await User.findOne({ email: lower });
+
+  if (user) {
+    if (!user.roles.includes('shop')) {
+      user.roles.push('shop');
+      await user.save();
+    }
+    return { user, reused: true };
+  }
+
+  user = await User.create({
+    name: name || 'Shop owner',
+    email: lower,
+    phone: phone || undefined,
+    passwordHash: await hashPassword(password),
+    mustChangePassword: true,
+    roles: ['shop'],
+  });
+  return { user, reused: false };
+}
+
+/**
+ * Lets a logged-in user set a new password (used for the forced first-login
+ * password change on admin-created accounts). Clears the mustChangePassword
+ * flag once done.
+ */
+export async function setOwnPassword({ userId, newPassword }) {
+  if (!newPassword || newPassword.length < 6) {
+    throw new HttpError(400, 'Password must be at least 6 characters');
+  }
+  const user = await User.findById(userId);
+  if (!user) throw new HttpError(404, 'User not found');
+  user.passwordHash = await hashPassword(newPassword);
+  user.mustChangePassword = false;
+  await user.save();
+  return { ok: true };
+}
+
+/**
  * Called after a successful OTP verification.
  * If a user with this phone exists, log them in. Otherwise create a
  * customer-by-default account (they can be upgraded to shop/delivery later
