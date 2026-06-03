@@ -17,8 +17,14 @@ const userSchema = new mongoose.Schema(
     phone: { type: String, trim: true, sparse: true, unique: true },
 
     passwordHash: { type: String, select: false },
+    // Set true when an admin creates the account with a temporary password;
+    // the user is prompted to set their own password on first login.
+    mustChangePassword: { type: Boolean, default: false },
     phoneVerified: { type: Boolean, default: false },
     emailVerified: { type: Boolean, default: false },
+    // Set true when an admin creates the account with a temporary password;
+    // the user is forced to set their own password on first login.
+    mustChangePassword: { type: Boolean, default: false },
 
     oauthProviders: [
       {
