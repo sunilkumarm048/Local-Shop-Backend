@@ -29,7 +29,11 @@ export function isEmailEnabled() {
  * @param {{to:string, subject:string, html:string, text?:string}} msg
  */
 export async function sendEmail({ to, subject, html, text }) {
-  if (!emailEnabled) return { ok: false, disabled: true };
+  if (!emailEnabled) {
+    console.log('[email] sendEmail called but email is DISABLED (missing RESEND_API_KEY or RESEND_FROM)');
+    return { ok: false, disabled: true };
+  }
+  console.log('[email] sending to', to, 'via Resend...');
   try {
     const { data, error } = await resend.emails.send({
       from: env.RESEND_FROM,
@@ -39,9 +43,10 @@ export async function sendEmail({ to, subject, html, text }) {
       text,
     });
     if (error) {
-      console.error('[email] send failed:', error.message || error);
+      console.error('[email] Resend returned error:', JSON.stringify(error));
       return { ok: false, error };
     }
+    console.log('[email] Resend success, id:', data?.id);
     return { ok: true, id: data?.id };
   } catch (err) {
     console.error('[email] send threw:', err.message);
