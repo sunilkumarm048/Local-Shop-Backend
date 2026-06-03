@@ -7,8 +7,12 @@ import {
   loginWithEmail,
   loginOrCreateWithPhone,
   getCurrentUser,
+  setOwnPassword,
 } from '../services/auth.js';
 import { sendOtp, verifyOtp } from '../services/otp.js';
+import { sendResetOtp, verifyResetOtp } from '../services/emailOtp.js';
+import { User } from '../models/index.js';
+import { HttpError } from '../middleware/error.js';
 import { requireAuth } from '../middleware/auth.js';
 import { validateBody } from '../utils/validate.js';
 
@@ -110,6 +114,99 @@ router.get('/me', requireAuth, async (req, res, next) => {
 // if we need true server-side invalidation.
 router.post('/logout', requireAuth, (_req, res) => {
   res.json({ ok: true });
+});
+
+/**
+ * POST /api/auth/change-password — set a new password for the logged-in user.
+ * Used for the forced first-login change on admin-created shop accounts, and
+ * usable any time a user wants to change their password.
+ */
+router.post('/change-password', requireAuth, async (req, res, next) => {
+  try {
+    const { newPassword } = validateBody(
+      req,
+      z.object({ newPassword: z.string().min(6).max(72) })
+    );
+    await setOwnPassword({ userId: req.user._id, newPassword });
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * POST /api/auth/forgot-password — emails a 6-digit reset code.
+ *
+ * Always responds 200 with the same message whether or not the email is
+ * registered, so attackers can't use it to discover which emails have
+ * accounts. The code is only actually sent if a user with that email exists
+ * AND email is configured.
+ */
+router.post('/forgot-password', async (req, res, next) => {
+  try {
+    const { email } = validateBody(
+      req,
+      z.object({ email: z.string().email() })
+    );
+    const lower = email.toLowerCase();
+    const user = await User.findOne({ email: lower });
+
+    let emailDisabled = false;
+    if (user) {
+      const result = await sendResetOtp(lower);
+      if (!result.ok && result.reason === 'email_disabled') emailDisabled = true;
+    }
+
+    // If email isn't configured at all, tell the caller plainly (this isn't a
+    // user-enumeration leak — it's a server config fact).
+    if (emailDisabled) {
+      throw new HttpError(503, 'Password reset by email is not available right now.');
+    }
+
+    res.json({
+      ok: true,
+      message: 'If that email is registered, a reset code has been sent.',
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * POST /api/auth/reset-password — verify the emailed code and set a new
+ * password. Consumes the code on success.
+ */
+router.post('/reset-password', async (req, res, next) => {
+  try {
+    const { email, code, newPassword } = validateBody(
+      req,
+      z.object({
+        email: z.string().email(),
+        code: z.string().min(4).max(8),
+        newPassword: z.string().min(6).max(72),
+      })
+    );
+    const lower = email.toLowerCase();
+
+    const check = await verifyResetOtp(lower, code);
+    if (!check.ok) {
+      const msg =
+        check.reason === 'wrong_code'
+          ? 'Incorrect code. Please try again.'
+          : check.reason === 'too_many_attempts'
+            ? 'Too many attempts. Request a new code.'
+            : 'Your reset code has expired. Request a new one.';
+      throw new HttpError(400, msg);
+    }
+
+    const user = await User.findOne({ email: lower });
+    if (!user) throw new HttpError(404, 'Account not found');
+
+    await setOwnPassword({ userId: user._id, newPassword });
+    res.json({ ok: true, message: 'Password updated. You can now log in.' });
+  } catch (err) {
+    next(err);
+  }
 });
 
 export default router;
