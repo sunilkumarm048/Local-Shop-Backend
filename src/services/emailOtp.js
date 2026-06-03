@@ -1,49 +1,37 @@
 import crypto from 'crypto';
 
-import { redis } from '../config/redis.js';
+import { PasswordResetCode } from '../models/index.js';
 import { sendOtpEmail } from './email.js';
 
 /**
- * Email OTP for password reset. Same shape as the SMS OTP service: a 6-digit
- * code stored in Redis with a TTL, rate-limited per email, max attempts.
+ * Email OTP for password reset — backed by MongoDB (NOT Redis).
+ *
+ * Redis on the current host is unstable (ECONNRESET), and a flaky cache must
+ * never block password resets, so reset codes live in MongoDB with a TTL index
+ * that auto-expires them. Same exported API as before, so the routes are
+ * unchanged.
  */
 
-const OTP_TTL_SECONDS = 10 * 60; // 10 min
-const RATE_WINDOW_SECONDS = 60 * 60; // 1 hour
-const MAX_SENDS_PER_WINDOW = 5;
+const OTP_TTL_MS = 10 * 60 * 1000; // 10 min
 const MAX_ATTEMPTS = 5;
 
 function genCode() {
-  // 6-digit, leading zeros allowed.
   return String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
 }
 
-function key(email) {
-  return `pwreset:otp:${email.toLowerCase()}`;
-}
-
 /**
- * Generate + email a reset code. Rate-limited. Returns { ok } or
- * { ok:false, reason }. Always behaves the same whether or not the email
- * belongs to a real user — the CALLER decides whether to reveal that, to avoid
- * leaking which emails are registered.
+ * Generate + email a reset code (upsert: one active code per email).
+ * Returns { ok } or { ok:false, reason }.
  */
 export async function sendResetOtp(rawEmail) {
   const email = rawEmail.toLowerCase().trim();
-
-  const rateKey = `pwreset:rate:${email}`;
-  const count = await redis.incr(rateKey);
-  if (count === 1) await redis.expire(rateKey, RATE_WINDOW_SECONDS);
-  if (count > MAX_SENDS_PER_WINDOW) {
-    return { ok: false, reason: 'rate_limited' };
-  }
-
   const code = genCode();
-  await redis.set(
-    key(email),
-    JSON.stringify({ code, attempts: 0 }),
-    'EX',
-    OTP_TTL_SECONDS
+  const expiresAt = new Date(Date.now() + OTP_TTL_MS);
+
+  await PasswordResetCode.findOneAndUpdate(
+    { email },
+    { $set: { code, attempts: 0, expiresAt } },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
   );
 
   const res = await sendOtpEmail(email, code);
@@ -55,27 +43,25 @@ export async function sendResetOtp(rawEmail) {
 
 /**
  * Verify a reset code. Returns { ok } or { ok:false, reason }.
- * On success the code is consumed (deleted).
+ * Consumes the code on success.
  */
 export async function verifyResetOtp(rawEmail, code) {
   const email = rawEmail.toLowerCase().trim();
-  const k = key(email);
-  const raw = await redis.get(k);
-  if (!raw) return { ok: false, reason: 'expired_or_missing' };
+  const doc = await PasswordResetCode.findOne({ email });
 
-  const payload = JSON.parse(raw);
-  if (payload.attempts >= MAX_ATTEMPTS) {
-    await redis.del(k);
+  if (!doc || doc.expiresAt < new Date()) {
+    return { ok: false, reason: 'expired_or_missing' };
+  }
+  if (doc.attempts >= MAX_ATTEMPTS) {
+    await PasswordResetCode.deleteOne({ _id: doc._id });
     return { ok: false, reason: 'too_many_attempts' };
   }
-
-  if (payload.code !== String(code).trim()) {
-    payload.attempts += 1;
-    const ttl = await redis.ttl(k);
-    await redis.set(k, JSON.stringify(payload), 'EX', ttl > 0 ? ttl : OTP_TTL_SECONDS);
+  if (doc.code !== String(code).trim()) {
+    doc.attempts += 1;
+    await doc.save();
     return { ok: false, reason: 'wrong_code' };
   }
 
-  await redis.del(k);
+  await PasswordResetCode.deleteOne({ _id: doc._id });
   return { ok: true };
 }
