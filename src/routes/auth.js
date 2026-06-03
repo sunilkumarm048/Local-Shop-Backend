@@ -57,9 +57,12 @@ const loginSchema = z.object({
 router.post('/login', async (req, res, next) => {
   try {
     const data = validateBody(req, loginSchema);
+    console.log('[login] attempt for:', data.email);
     const result = await loginWithEmail(data);
+    console.log('[login] SUCCESS for:', data.email, '- token issued, mustChangePassword:', result.user?.mustChangePassword);
     res.json(result);
   } catch (err) {
+    console.error('[login] FAILED for', req.body?.email, '-', err.statusCode || '?', err.message);
     next(err);
   }
 });
