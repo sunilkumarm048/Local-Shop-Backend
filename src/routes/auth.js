@@ -149,11 +149,15 @@ router.post('/forgot-password', async (req, res, next) => {
       z.object({ email: z.string().email() })
     );
     const lower = email.toLowerCase();
+    console.log('[forgot-password] request for:', lower);
     const user = await User.findOne({ email: lower });
+    console.log('[forgot-password] user found:', Boolean(user));
 
     let emailDisabled = false;
     if (user) {
+      console.log('[forgot-password] calling sendResetOtp...');
       const result = await sendResetOtp(lower);
+      console.log('[forgot-password] sendResetOtp result:', JSON.stringify(result));
       if (!result.ok && result.reason === 'email_disabled') emailDisabled = true;
     }
 
@@ -168,6 +172,7 @@ router.post('/forgot-password', async (req, res, next) => {
       message: 'If that email is registered, a reset code has been sent.',
     });
   } catch (err) {
+    console.error('[forgot-password] error:', err.message);
     next(err);
   }
 });
