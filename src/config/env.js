@@ -24,6 +24,10 @@ const schema = z.object({
   VAPID_PUBLIC_KEY: z.string().optional(),
   VAPID_PRIVATE_KEY: z.string().optional(),
   VAPID_SUBJECT: z.string().optional(), // e.g. mailto:you@example.com
+  // Email (Resend) for password-reset OTP and notifications. Leave unset to
+  // disable email features cleanly. RESEND_FROM must be a verified sender.
+  RESEND_API_KEY: z.string().optional(),
+  RESEND_FROM: z.string().optional(), // e.g. "Local Shop <noreply@yourdomain.com>"
   // PHASE 6a: comma-separated allowlist. Any user whose email is in here is
   // auto-granted the 'admin' role on login. The easiest way to bootstrap your
   // first admin without writing a MongoDB script.
