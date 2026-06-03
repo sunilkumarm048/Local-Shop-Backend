@@ -1,11 +1,13 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import crypto from 'crypto';
 
 import { User, Shop, Order, Category, PricingConfig, WithdrawRequest, DeliveryProfile, Product, ProductTemplate } from '../models/index.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireRole } from '../middleware/role.js';
 import { validateBody } from '../utils/validate.js';
 import { HttpError } from '../middleware/error.js';
+import { createShopOwnerAccount } from '../services/auth.js';
 
 const router = Router();
 
@@ -95,6 +97,83 @@ router.get('/shops', async (req, res, next) => {
       .lean();
 
     res.json({ shops });
+  } catch (err) {
+    next(err);
+  }
+});
+
+function adminMakeSlug(name) {
+  const base =
+    String(name || 'shop')
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 40) || 'shop';
+  return `${base}-${crypto.randomBytes(2).toString('hex')}`;
+}
+
+const quickShopSchema = z.object({
+  name: z.string().min(2).max(120),
+  category: z.string().min(1), // category _id
+  phone: z.string().min(6).max(20),
+  ownerEmail: z.string().email(),
+  ownerPassword: z.string().min(6).max(72),
+  description: z.string().max(500).optional(),
+  logo: z.string().url().optional(),
+  lat: z.number(),
+  lng: z.number(),
+  address: z
+    .object({
+      line1: z.string().max(200).optional(),
+      city: z.string().max(100).optional(),
+      pincode: z.string().max(12).optional(),
+    })
+    .optional(),
+});
+
+/**
+ * POST /api/admin/shops/quick-create
+ *
+ * Field-onboarding tool: lets an admin/agent list a shop ON BEHALF of a
+ * shopkeeper in seconds, while standing in the shop. Creates a login for the
+ * owner (email + a temporary password the admin sets) so the shopkeeper can
+ * immediately sign in and manage their shop. The owner is prompted to change
+ * the password on first login. Shop goes live immediately (auto-approved).
+ */
+router.post('/shops/quick-create', async (req, res, next) => {
+  try {
+    const data = validateBody(req, quickShopSchema);
+
+    // Create (or reuse) the shop-owner login account.
+    const { user: owner, reused } = await createShopOwnerAccount({
+      email: data.ownerEmail,
+      password: data.ownerPassword,
+      name: data.name,
+      phone: data.phone,
+    });
+
+    const shop = await Shop.create({
+      name: data.name,
+      owner: owner._id,
+      ownerEmail: owner.email,
+      category: data.category,
+      phone: data.phone,
+      description: data.description || '',
+      logo: data.logo || undefined,
+      address: data.address || {},
+      location: { type: 'Point', coordinates: [data.lng, data.lat] },
+      slug: adminMakeSlug(data.name),
+      isApproved: true, // agent-created → live immediately
+      isOpen: true,
+    });
+
+    res.status(201).json({
+      shop,
+      ownerId: owner._id,
+      ownerEmail: owner.email,
+      reusedExistingAccount: reused,
+    });
   } catch (err) {
     next(err);
   }
