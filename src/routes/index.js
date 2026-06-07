@@ -11,6 +11,7 @@ import delivery from './delivery.js';
 import admin from './admin.js';
 import transport from './transport.js';
 import templates from './templates.js';
+import geo from './geo.js';
 
 const router = Router();
 
@@ -26,10 +27,10 @@ router.use('/delivery', delivery);
 router.use('/admin', admin);
 router.use('/transport', transport);
 router.use('/templates', templates);
+router.use('/geo', geo);
 
 router.get('/', (_req, res) => {
   res.json({ name: 'local-shop-api', version: '0.14.0' });
 });
 
 export default router;
-  
