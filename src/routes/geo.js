@@ -30,15 +30,22 @@ router.get('/search', async (req, res, next) => {
       try {
         const url = `${OLA}/autocomplete?input=${encodeURIComponent(q)}&api_key=${env.OLA_MAPS_API_KEY}`;
         const r = await fetch(url, { headers: { 'X-Request-Id': `ls-${Date.now()}` } });
+        console.log('[geo] ola autocomplete status:', r.status);
         if (r.ok) {
           const data = await r.json();
           const results = normalizeOlaAutocomplete(data);
+          console.log('[geo] ola parsed results:', results.length, '| raw keys:', Object.keys(data || {}).join(','));
           // If Ola returned nothing useful, fall through to Nominatim.
           if (results.length > 0) return res.json({ results, source: 'ola' });
+        } else {
+          const body = await r.text();
+          console.log('[geo] ola error body:', body.slice(0, 300));
         }
-      } catch {
-        // ignore and fall back
+      } catch (e) {
+        console.log('[geo] ola threw:', e.message);
       }
+    } else {
+      console.log('[geo] OLA_MAPS_API_KEY not set — using OSM');
     }
 
     // Fallback: Nominatim (India-only)
