@@ -2,7 +2,7 @@ import { Router } from 'express';
 import crypto from 'node:crypto';
 import { z } from 'zod';
 
-import { Order, Product, Shop, DeliveryProfile } from '../models/index.js';
+import { Order, Product, Shop } from '../models/index.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireRole } from '../middleware/role.js';
 import { validateBody } from '../utils/validate.js';
@@ -387,9 +387,34 @@ router.get('/shop/:shopId', requireAuth, requireRole('shop'), async (req, res, n
     }
 
     const orders = await Order.find(filter)
+      .populate('deliveryPartner', 'name phone')
       .sort({ createdAt: -1 })
       .limit(Math.min(Number(limit) || 100, 200))
       .lean();
+
+    // Attach vehicle info (from DeliveryProfile) to any assigned partners, so
+    // the shop can see who is coming to collect. One query for all partners.
+    const partnerIds = orders
+      .map((o) => o.deliveryPartner?._id)
+      .filter(Boolean);
+    if (partnerIds.length) {
+      const profiles = await DeliveryProfile.find({ user: { $in: partnerIds } })
+        .select('user vehicleType vehicleNumber')
+        .lean();
+      const byUser = new Map(profiles.map((p) => [p.user.toString(), p]));
+      for (const o of orders) {
+        if (o.deliveryPartner?._id) {
+          const prof = byUser.get(o.deliveryPartner._id.toString());
+          o.deliveryPartner = {
+            _id: o.deliveryPartner._id,
+            name: o.deliveryPartner.name || null,
+            phone: o.deliveryPartner.phone || null,
+            vehicleType: prof?.vehicleType || null,
+            vehicleNumber: prof?.vehicleNumber || null,
+          };
+        }
+      }
+    }
 
     res.json({ orders });
   } catch (err) {
@@ -516,17 +541,12 @@ router.get('/:id', requireAuth, async (req, res, next) => {
   try {
     const order = await Order.findById(req.params.id)
       .populate('shop', 'name logo location phone')
-      .populate('deliveryPartner', 'name phone')
       .lean();
     if (!order) return res.status(404).json({ error: 'Order not found' });
 
     const uid = req.user._id.toString();
-    // deliveryPartner may now be a populated object or null — compare on _id.
-    const partnerId = order.deliveryPartner?._id
-      ? order.deliveryPartner._id.toString()
-      : order.deliveryPartner?.toString();
     const isCustomer = order.customer.toString() === uid;
-    const isDelivery = partnerId === uid;
+    const isDelivery = order.deliveryPartner?.toString() === uid;
     const isShopOwner =
       req.user.roles.includes('shop') &&
       (await Shop.exists({ _id: order.shop, owner: req.user._id }));
@@ -534,21 +554,6 @@ router.get('/:id', requireAuth, async (req, res, next) => {
 
     if (!isCustomer && !isDelivery && !isShopOwner && !isAdmin) {
       return res.status(403).json({ error: 'Forbidden' });
-    }
-
-    // Enrich the assigned partner with vehicle info (stored on DeliveryProfile,
-    // not on the User). Name + phone + vehicle are safe to show the customer.
-    if (order.deliveryPartner?._id) {
-      const profile = await DeliveryProfile.findOne({ user: order.deliveryPartner._id })
-        .select('vehicleType vehicleNumber')
-        .lean();
-      order.deliveryPartner = {
-        _id: order.deliveryPartner._id,
-        name: order.deliveryPartner.name || null,
-        phone: order.deliveryPartner.phone || null,
-        vehicleType: profile?.vehicleType || null,
-        vehicleNumber: profile?.vehicleNumber || null,
-      };
     }
 
     res.json({ order });
