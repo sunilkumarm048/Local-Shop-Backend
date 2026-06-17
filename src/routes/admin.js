@@ -327,7 +327,7 @@ router.get('/orders', async (req, res, next) => {
     if (shopId) filter.shop = shopId;
 
     const orders = await Order.find(filter)
-      .populate('shop', 'name logo')
+      .populate('shop', 'name logo phone address')
       .populate('customer', 'name email phone')
       .populate('deliveryPartner', 'name email phone')
       .sort({ createdAt: -1 })
@@ -823,4 +823,3 @@ router.delete('/templates/:id', async (req, res, next) => {
 });
 
 export default router;
-  
