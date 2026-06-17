@@ -61,10 +61,31 @@ router.get('/', optionalAuth, async (req, res, next) => {
 
     const filter = { isApproved: true, isBlocked: false };
     if (category) filter.category = category;
-    if (q) filter.$text = { $search: String(q) };
+
+    const hasGeo = lng && lat;
+    const term = q ? String(q).trim() : '';
+
+    // MongoDB forbids $text and $nearSphere in the same query. So:
+    //   - with a location: match name/description by regex (combines with geo)
+    //   - without a location: use the faster $text index
+    if (term) {
+      if (hasGeo) {
+        // Escape regex special chars, match each word (AND) on name/description.
+        const safe = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const words = safe.split(/\s+/).filter(Boolean);
+        filter.$and = words.map((w) => ({
+          $or: [
+            { name: { $regex: w, $options: 'i' } },
+            { description: { $regex: w, $options: 'i' } },
+          ],
+        }));
+      } else {
+        filter.$text = { $search: term };
+      }
+    }
 
     let cursor;
-    if (lng && lat) {
+    if (hasGeo) {
       filter.location = {
         $nearSphere: {
           $geometry: { type: 'Point', coordinates: [Number(lng), Number(lat)] },
