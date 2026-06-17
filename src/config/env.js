@@ -31,6 +31,9 @@ const schema = z.object({
   // Ola Maps (India geocoding/autocomplete) — server-side key, never exposed
   // to the browser. Leave unset to fall back to OpenStreetMap/Nominatim.
   OLA_MAPS_API_KEY: z.string().optional(),
+  // Anthropic (Claude) — used to correct/normalize customer search queries
+  // (typos, half-words). Leave unset to fall back to the raw query cleanly.
+  ANTHROPIC_API_KEY: z.string().optional(),
   // PHASE 6a: comma-separated allowlist. Any user whose email is in here is
   // auto-granted the 'admin' role on login. The easiest way to bootstrap your
   // first admin without writing a MongoDB script.
