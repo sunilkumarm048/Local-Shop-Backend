@@ -70,15 +70,19 @@ router.get('/', optionalAuth, async (req, res, next) => {
     //   - without a location: use the faster $text index
     if (term) {
       if (hasGeo) {
-        // Escape regex special chars, match each word (AND) on name/description.
-        const safe = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const words = safe.split(/\s+/).filter(Boolean);
-        filter.$and = words.map((w) => ({
-          $or: [
-            { name: { $regex: w, $options: 'i' } },
-            { description: { $regex: w, $options: 'i' } },
-          ],
-        }));
+        // Match name/description by regex (combines with $nearSphere, unlike
+        // $text). Match if ANY word appears — so "Sonu Sweets" still finds a
+        // shop named just "Sonu". Escape regex special chars per word.
+        const words = term
+          .split(/\s+/)
+          .filter(Boolean)
+          .map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+        const clauses = [];
+        for (const w of words) {
+          clauses.push({ name: { $regex: w, $options: 'i' } });
+          clauses.push({ description: { $regex: w, $options: 'i' } });
+        }
+        if (clauses.length) filter.$or = clauses;
       } else {
         filter.$text = { $search: term };
       }
