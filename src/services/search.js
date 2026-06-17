@@ -26,9 +26,10 @@ const CACHE_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
 
 const INSTRUCTION =
   'You correct short shopping search queries for a local Indian marketplace ' +
-  '(shops and products in Odisha, India). Fix spelling, complete half-words, ' +
-  'and normalize to the most likely intended shop or product name in English. ' +
-  'Keep it short. Do not add words that were not implied. ' +
+  '(shops and products in Odisha, India). Only fix clear spelling mistakes and ' +
+  'complete obvious half-words. Do NOT add extra words, categories, or guesses ' +
+  'that the user did not type — if the input is already a plausible name, return ' +
+  'it unchanged. Keep it short. ' +
   'Reply with ONLY the corrected query text — no quotes, no explanation.';
 
 /**
