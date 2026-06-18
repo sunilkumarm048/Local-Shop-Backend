@@ -570,6 +570,64 @@ router.post(
 );
 
 /**
+ * POST /api/shops/:id/products/sync-images
+ *
+ * Backfills product images from the catalog templates, matched by name.
+ * For every product in this shop whose name matches an active template that
+ * HAS an image, copy the template image onto the product (overwrite).
+ *
+ * Products with no matching template, or whose template has no image, are
+ * left untouched — so this never wipes an image to blank.
+ */
+router.post(
+  '/:id/products/sync-images',
+  requireAuth,
+  requireRole('shop'),
+  async (req, res, next) => {
+    try {
+      const shop = await assertShopOwner(req, req.params.id);
+
+      // Templates that actually have a usable image (ignore empty + dead placeholder).
+      const templates = await ProductTemplate.find({ isActive: true })
+        .select('name image')
+        .lean();
+      const imageByName = new Map();
+      for (const t of templates) {
+        const img = t.image || '';
+        if (img && !img.includes('via.placeholder.com')) {
+          imageByName.set(t.name.trim().toLowerCase(), img);
+        }
+      }
+
+      const products = await Product.find({ shop: shop._id }).select('name image').lean();
+
+      const ops = [];
+      for (const p of products) {
+        const tplImage = imageByName.get((p.name || '').trim().toLowerCase());
+        if (tplImage && p.image !== tplImage) {
+          ops.push({
+            updateOne: {
+              filter: { _id: p._id },
+              update: { $set: { image: tplImage } },
+            },
+          });
+        }
+      }
+
+      let updated = 0;
+      if (ops.length) {
+        const result = await Product.bulkWrite(ops);
+        updated = result.modifiedCount || ops.length;
+      }
+
+      res.json({ updated, scanned: products.length });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
  * PATCH /api/shops/:id/products/:productId
  */
 router.patch(
