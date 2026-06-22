@@ -34,6 +34,13 @@ const shopSchema = new mongoose.Schema(
     },
 
     isOpen: { type: Boolean, default: true },
+
+    // For service providers (plumber, electrician, AC repair, etc.): whether
+    // they are currently available to take home-visit jobs right now. Mirrors a
+    // delivery partner's online toggle. Ignored for normal product shops.
+    availableNow: { type: Boolean, default: false },
+    availableUpdatedAt: { type: Date },
+
     openingHours: [
       {
         day: { type: Number, min: 0, max: 6 }, // 0 = Sunday
