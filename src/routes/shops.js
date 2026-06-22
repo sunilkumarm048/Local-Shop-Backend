@@ -11,6 +11,32 @@ import { shopAnalytics } from '../services/analytics.js';
 
 const router = Router();
 
+/**
+ * Decide whether a shop is a "service provider" (plumber, electrician, AC
+ * repair, etc.) rather than a product shop. Detected by category: the shop's
+ * category, or its parent group, has a name containing "service". Mirrors the
+ * frontend's isServicesGroup check so both sides agree.
+ *
+ * Expects `shop.category` to be populated, ideally with its `parent` populated
+ * too. Falls back to false when category info isn't available.
+ */
+function computeIsService(shop) {
+  const cat = shop?.category;
+  if (!cat || typeof cat !== 'object') return false;
+  const names = [];
+  if (cat.name) names.push(cat.name);
+  if (cat.parent && typeof cat.parent === 'object' && cat.parent.name) {
+    names.push(cat.parent.name);
+  }
+  return names.some((n) => String(n).toLowerCase().includes('service'));
+}
+
+/** Attach an `isService` boolean to a plain shop object (from .lean()). */
+function withServiceFlag(shop) {
+  return { ...shop, isService: computeIsService(shop) };
+}
+
+
 // ---------- helpers ----------
 
 /**
@@ -101,8 +127,12 @@ router.get('/', optionalAuth, async (req, res, next) => {
       cursor = Shop.find(filter).sort({ createdAt: -1 });
     }
 
-    const shops = await cursor.limit(Number(limit)).skip(Number(skip)).lean();
-    res.json({ shops });
+    const shops = await cursor
+      .limit(Number(limit))
+      .skip(Number(skip))
+      .populate({ path: 'category', populate: { path: 'parent' } })
+      .lean();
+    res.json({ shops: shops.map(withServiceFlag) });
   } catch (err) {
     next(err);
   }
@@ -266,9 +296,9 @@ router.post('/', requireAuth, requireRole('shop'), async (req, res, next) => {
 router.get('/mine', requireAuth, requireRole('shop'), async (req, res, next) => {
   try {
     const shops = await Shop.find({ owner: req.user._id })
-      .populate('category')
+      .populate({ path: 'category', populate: { path: 'parent' } })
       .lean();
-    res.json({ shops });
+    res.json({ shops: shops.map(withServiceFlag) });
   } catch (err) {
     next(err);
   }
@@ -312,9 +342,11 @@ router.get('/mine/analytics', requireAuth, requireRole('shop'), async (req, res,
  */
 router.get('/:id', async (req, res, next) => {
   try {
-    const shop = await Shop.findById(req.params.id).populate('category').lean();
+    const shop = await Shop.findById(req.params.id)
+      .populate({ path: 'category', populate: { path: 'parent' } })
+      .lean();
     if (!shop || shop.isBlocked) return res.status(404).json({ error: 'Shop not found' });
-    res.json({ shop });
+    res.json({ shop: withServiceFlag(shop) });
   } catch (err) {
     next(err);
   }
@@ -404,9 +436,29 @@ router.patch('/:id', requireAuth, requireRole('shop'), async (req, res, next) =>
 });
 
 /**
- * GET /api/shops/:id/products/all — ALL products (including inactive) for owner.
- * Public route GET /:id/products only returns active=true.
+ * PATCH /api/shops/:id/availability — service provider toggles "available now".
+ * Body: { availableNow: boolean }. Lets plumbers/electricians/etc. flip their
+ * live availability the way a delivery partner goes online/offline.
  */
+const availabilitySchema = z.object({ availableNow: z.boolean() });
+
+router.patch(
+  '/:id/availability',
+  requireAuth,
+  requireRole('shop'),
+  async (req, res, next) => {
+    try {
+      const data = validateBody(req, availabilitySchema);
+      const shop = await assertShopOwner(req, req.params.id);
+      shop.availableNow = data.availableNow;
+      shop.availableUpdatedAt = new Date();
+      await shop.save();
+      res.json({ shop: { _id: shop._id, availableNow: shop.availableNow } });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 router.get(
   '/:id/products/all',
   requireAuth,
