@@ -219,3 +219,33 @@ export async function getCurrentUser(userId) {
   if (!user) throw new HttpError(404, 'User not found');
   return toPublic(user);
 }
+
+/**
+ * Update the current user's editable profile fields: name, avatar, and the
+ * address book. Email/phone are identity fields tied to auth, so we don't
+ * change them here. Unspecified fields are left untouched.
+ */
+export async function updateProfile(userId, data) {
+  const user = await User.findById(userId);
+  if (!user) throw new HttpError(404, 'User not found');
+
+  if (data.name !== undefined) user.name = data.name;
+  if (data.avatar !== undefined) user.avatar = data.avatar || undefined;
+  if (data.addresses !== undefined) {
+    user.addresses = data.addresses.map((a) => ({
+      label: a.label,
+      line1: a.line1,
+      line2: a.line2,
+      city: a.city,
+      state: a.state,
+      pincode: a.pincode,
+      location:
+        a.location && a.location.lng != null && a.location.lat != null
+          ? { type: 'Point', coordinates: [a.location.lng, a.location.lat] }
+          : undefined,
+    }));
+  }
+
+  await user.save();
+  return toPublic(user);
+}
