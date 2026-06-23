@@ -8,6 +8,7 @@ import {
   loginOrCreateWithPhone,
   getCurrentUser,
   setOwnPassword,
+  updateProfile,
 } from '../services/auth.js';
 import { sendOtp, verifyOtp } from '../services/otp.js';
 import { sendResetOtp, verifyResetOtp } from '../services/emailOtp.js';
@@ -106,6 +107,34 @@ router.post('/otp/verify', async (req, res, next) => {
 router.get('/me', requireAuth, async (req, res, next) => {
   try {
     const user = await getCurrentUser(req.user._id);
+    res.json({ user });
+  } catch (err) {
+    next(err);
+  }
+});
+
+const addressSchema = z.object({
+  label: z.string().trim().max(40).optional(),
+  line1: z.string().trim().max(120).optional(),
+  line2: z.string().trim().max(120).optional(),
+  city: z.string().trim().max(80).optional(),
+  state: z.string().trim().max(80).optional(),
+  pincode: z.string().trim().max(12).optional(),
+  location: z
+    .object({ lng: z.number(), lat: z.number() })
+    .optional(),
+});
+
+const updateProfileSchema = z.object({
+  name: z.string().trim().min(1).max(80).optional(),
+  avatar: z.string().url().optional().or(z.literal('')),
+  addresses: z.array(addressSchema).max(10).optional(),
+});
+
+router.patch('/me', requireAuth, async (req, res, next) => {
+  try {
+    const data = validateBody(req, updateProfileSchema);
+    const user = await updateProfile(req.user._id, data);
     res.json({ user });
   } catch (err) {
     next(err);
