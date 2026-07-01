@@ -2,7 +2,7 @@ import bcrypt from 'bcryptjs';
 import { User, DeliveryProfile } from '../models/index.js';
 import { signToken } from '../utils/jwt.js';
 import { HttpError } from '../middleware/error.js';
-import { ADMIN_EMAILS } from '../config/env.js';
+import { ADMIN_EMAILS, env } from '../config/env.js';
 
 const ALLOWED_SIGNUP_ROLES = ['customer', 'shop', 'delivery'];
 
@@ -119,6 +119,88 @@ export async function loginWithEmail({ email, password }) {
 
   const ok = await bcrypt.compare(password, user.passwordHash);
   if (!ok) throw new HttpError(401, 'Invalid credentials');
+
+  user.lastLoginAt = new Date();
+  await maybePromoteAdmin(user);
+  await user.save();
+
+  return { user: toPublic(user), token: issueToken(user) };
+}
+
+/**
+ * Verify a Google ID token and log the user in (creating the account if new).
+ *
+ * Uses Google's tokeninfo endpoint to validate the token signature server-side
+ * — no extra dependency. We then check the audience matches our client ID and
+ * the issuer is Google before trusting any claims.
+ *
+ * Account resolution order:
+ *   1. Match an existing user by their linked Google subject id.
+ *   2. Otherwise match by verified email (links Google to an existing account).
+ *   3. Otherwise create a fresh customer account.
+ */
+export async function loginWithGoogle({ idToken }) {
+  if (!idToken) throw new HttpError(400, 'Missing Google credential.');
+  if (!env.GOOGLE_CLIENT_ID) {
+    throw new HttpError(500, 'Google sign-in is not configured on the server.');
+  }
+
+  // Validate the token with Google and pull its claims.
+  let payload;
+  try {
+    const resp = await fetch(
+      `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`
+    );
+    if (!resp.ok) throw new Error('tokeninfo rejected the token');
+    payload = await resp.json();
+  } catch {
+    throw new HttpError(401, 'Could not verify your Google sign-in. Try again.');
+  }
+
+  // Security checks: audience must be our app, issuer must be Google.
+  const audOk = payload.aud === env.GOOGLE_CLIENT_ID;
+  const issOk =
+    payload.iss === 'accounts.google.com' || payload.iss === 'https://accounts.google.com';
+  if (!audOk || !issOk) {
+    throw new HttpError(401, 'Invalid Google sign-in.');
+  }
+
+  const sub = payload.sub;
+  const email = (payload.email || '').toLowerCase();
+  const emailVerified = payload.email_verified === 'true' || payload.email_verified === true;
+  const name = payload.name;
+  const picture = payload.picture;
+  if (!sub) throw new HttpError(401, 'Invalid Google sign-in.');
+
+  // 1) Already linked?
+  let user = await User.findOne({
+    oauthProviders: { $elemMatch: { provider: 'google', providerId: sub } },
+  });
+
+  // 2) Link to an existing account by verified email.
+  if (!user && email && emailVerified) {
+    user = await User.findOne({ email });
+    if (user) {
+      user.oauthProviders = user.oauthProviders || [];
+      user.oauthProviders.push({ provider: 'google', providerId: sub });
+      if (!user.avatar && picture) user.avatar = picture;
+      user.emailVerified = true;
+    }
+  }
+
+  // 3) Brand-new account.
+  if (!user) {
+    user = new User({
+      name: name || (email ? email.split('@')[0] : 'Customer'),
+      email: email || undefined,
+      emailVerified: !!emailVerified,
+      avatar: picture || undefined,
+      roles: ['customer'],
+      oauthProviders: [{ provider: 'google', providerId: sub }],
+    });
+  }
+
+  if (user.isBlocked) throw new HttpError(403, 'Account disabled');
 
   user.lastLoginAt = new Date();
   await maybePromoteAdmin(user);
