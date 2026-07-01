@@ -5,6 +5,7 @@ import { z } from 'zod';
 import {
   registerWithEmail,
   loginWithEmail,
+  loginWithGoogle,
   loginOrCreateWithPhone,
   getCurrentUser,
   setOwnPassword,
@@ -64,6 +65,18 @@ router.post('/login', async (req, res, next) => {
     res.json(result);
   } catch (err) {
     console.error('[login] FAILED for', req.body?.email, '-', err.statusCode || '?', err.message);
+    next(err);
+  }
+});
+
+const googleSchema = z.object({ idToken: z.string().min(1) });
+
+router.post('/google', async (req, res, next) => {
+  try {
+    const data = validateBody(req, googleSchema);
+    const result = await loginWithGoogle(data);
+    res.json(result);
+  } catch (err) {
     next(err);
   }
 });
