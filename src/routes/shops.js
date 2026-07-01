@@ -2,7 +2,7 @@ import { Router } from 'express';
 import crypto from 'node:crypto';
 import { z } from 'zod';
 
-import { Shop, Product, Category, ProductTemplate } from '../models/index.js';
+import { Shop, Product, Category, ProductTemplate, Booking } from '../models/index.js';
 import { optionalAuth, requireAuth } from '../middleware/auth.js';
 import { requireRole } from '../middleware/role.js';
 import { validateBody } from '../utils/validate.js';
@@ -34,6 +34,35 @@ function computeIsService(shop) {
 /** Attach an `isService` boolean to a plain shop object (from .lean()). */
 function withServiceFlag(shop) {
   return { ...shop, isService: computeIsService(shop) };
+}
+
+/**
+ * A provider is "busy" (unbookable) while committed to an active booking:
+ * accepted → scheduled → on_the_way → in_progress. Freed on completed/declined/
+ * cancelled. Given a list of already-fetched shops, run ONE query to find which
+ * provider shops currently have such a booking, and attach a `busy` flag.
+ */
+const ACTIVE_BOOKING_STATUSES = ['accepted', 'scheduled', 'on_the_way', 'in_progress'];
+
+async function attachBusyFlags(shops) {
+  const serviceShopIds = shops
+    .filter((s) => computeIsService(s))
+    .map((s) => s._id);
+
+  let busySet = new Set();
+  if (serviceShopIds.length > 0) {
+    const busy = await Booking.find({
+      provider: { $in: serviceShopIds },
+      status: { $in: ACTIVE_BOOKING_STATUSES },
+    })
+      .distinct('provider');
+    busySet = new Set(busy.map((id) => String(id)));
+  }
+
+  return shops.map((s) => ({
+    ...withServiceFlag(s),
+    busy: busySet.has(String(s._id)),
+  }));
 }
 
 
@@ -132,7 +161,7 @@ router.get('/', optionalAuth, async (req, res, next) => {
       .skip(Number(skip))
       .populate({ path: 'category', populate: { path: 'parent' } })
       .lean();
-    res.json({ shops: shops.map(withServiceFlag) });
+    res.json({ shops: await attachBusyFlags(shops) });
   } catch (err) {
     next(err);
   }
@@ -346,7 +375,8 @@ router.get('/:id', async (req, res, next) => {
       .populate({ path: 'category', populate: { path: 'parent' } })
       .lean();
     if (!shop || shop.isBlocked) return res.status(404).json({ error: 'Shop not found' });
-    res.json({ shop: withServiceFlag(shop) });
+    const [withBusy] = await attachBusyFlags([shop]);
+    res.json({ shop: withBusy });
   } catch (err) {
     next(err);
   }
