@@ -58,6 +58,16 @@ router.post('/', requireAuth, async (req, res, next) => {
       throw new HttpError(404, 'Service provider not found.');
     }
 
+    // Guard against double-booking: refuse if the provider is already committed
+    // to an active job (accepted through in_progress).
+    const activeCount = await Booking.countDocuments({
+      provider: provider._id,
+      status: { $in: ['accepted', 'scheduled', 'on_the_way', 'in_progress'] },
+    });
+    if (activeCount > 0) {
+      throw new HttpError(409, 'This provider is currently on a job. Please try again later.');
+    }
+
     const booking = await Booking.create({
       customer: req.user._id,
       provider: provider._id,
