@@ -4,7 +4,8 @@ import { z } from 'zod';
 const schema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   PORT: z.coerce.number().default(4000),
-  CLIENT_ORIGIN: z.string().url().default('http://localhost:3000'),
+  // One URL, or several separated by commas (Vercel URL + custom domain + www).
+  CLIENT_ORIGIN: z.string().min(1).default('http://localhost:3000'),
   MONGODB_URI: z.string().min(1),
   REDIS_URL: z.string().min(1),
   JWT_SECRET: z.string().min(16, 'JWT_SECRET must be at least 16 characters'),
