@@ -16,9 +16,20 @@ export function createApp() {
   app.set('trust proxy', 1); // behind Render's proxy
 
   app.use(helmet());
+  // Allow one or more frontends. CLIENT_ORIGIN may be a single URL or a
+  // comma-separated list (e.g. the Vercel URL + the custom domain + its www).
+  const allowedOrigins = env.CLIENT_ORIGIN.split(',')
+    .map((o) => o.trim().replace(/\/$/, ''))
+    .filter(Boolean);
   app.use(
     cors({
-      origin: env.CLIENT_ORIGIN,
+      origin(origin, callback) {
+        // Allow non-browser requests (curl, server-to-server) with no origin.
+        if (!origin) return callback(null, true);
+        const clean = origin.replace(/\/$/, '');
+        if (allowedOrigins.includes(clean)) return callback(null, true);
+        return callback(new Error(`Not allowed by CORS: ${origin}`));
+      },
       credentials: true,
     })
   );
