@@ -1,4 +1,4 @@
-import { Order, TransportOrder } from '../models/index.js';
+import { Order, TransportOrder, Booking } from '../models/index.js';
 
 /**
  * Analytics aggregation helpers.
@@ -105,9 +105,49 @@ export async function shopAnalytics({ shopId, days = 30 }) {
     .slice(0, 5)
     .map((p) => ({ ...p, revenue: Math.round(p.revenue) }));
 
+  // ---- Service bookings (for service providers: plumber, AC repair, etc.) ----
+  // A shop can be a service provider instead of (or as well as) a product shop.
+  // Bookings carry no money, so we track counts + completion, not revenue.
+  const bookings = await Booking.find({
+    provider: shopId,
+    createdAt: { $gte: start, $lte: end },
+  })
+    .select('status createdAt completedAt')
+    .lean();
+
+  const totalBookings = bookings.length;
+  const completedBookings = bookings.filter((b) => b.status === 'completed').length;
+  const cancelledBookings = bookings.filter((b) =>
+    ['cancelled', 'declined'].includes(b.status)
+  ).length;
+  const activeBookings = bookings.filter(
+    (b) => !['completed', 'cancelled', 'declined'].includes(b.status)
+  ).length;
+  const bookingCompletionRate =
+    totalBookings > 0 ? Math.round((completedBookings / totalBookings) * 100) : 0;
+
+  // Dense per-day booking counts (reuse the same day-bucket walk).
+  const bookingBuckets = new Map();
+  for (const b of bookings) {
+    const day = toDayKey(b.createdAt || Date.now());
+    bookingBuckets.set(day, (bookingBuckets.get(day) || 0) + 1);
+  }
+  const bookingSeries = [];
+  for (let t = toDayKey(start); t <= toDayKey(end); t += DAY_MS) {
+    bookingSeries.push({ day: dayKeyLabel(t), bookings: bookingBuckets.get(t) || 0 });
+  }
+
   return {
     range: { from: start.toISOString(), to: end.toISOString(), days },
     summary: { totalOrders, totalRevenue: Math.round(totalRevenue), avgOrderValue, completionRate, delivered },
+    bookingSummary: {
+      totalBookings,
+      completedBookings,
+      activeBookings,
+      cancelledBookings,
+      completionRate: bookingCompletionRate,
+    },
+    bookingSeries,
     series,
     topProducts,
   };
@@ -185,4 +225,3 @@ export async function deliveryAnalytics({ userId, days = 30 }) {
     series,
   };
 }
-  
