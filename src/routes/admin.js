@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import crypto from 'crypto';
 
-import { User, Shop, Order, Category, PricingConfig, WithdrawRequest, DeliveryProfile, Product, ProductTemplate } from '../models/index.js';
+import { User, Shop, Order, Booking, Category, PricingConfig, WithdrawRequest, DeliveryProfile, Product, ProductTemplate } from '../models/index.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireRole } from '../middleware/role.js';
 import { validateBody } from '../utils/validate.js';
@@ -340,14 +340,49 @@ router.get('/orders', async (req, res, next) => {
   }
 });
 
-// ============================================================
-// CATEGORIES
-// ============================================================
+/**
+ * GET /api/admin/bookings?status=&providerId=
+ *
+ * Cross-provider view of ALL service bookings (plumber, salon, AC repair, …).
+ * Mirrors /admin/orders but for the Booking collection. status accepts a
+ * single status, 'active' (anything still in flight), or 'all'.
+ *
+ * Bookings are persisted permanently, so this doubles as the service order
+ * history — completed/cancelled bookings remain queryable via status=all.
+ */
+router.get('/bookings', async (req, res, next) => {
+  try {
+    const { status = 'active', providerId, limit = '100' } = req.query;
+    const filter = {};
+    if (status === 'active') {
+      filter.status = { $nin: ['completed', 'declined', 'cancelled'] };
+    } else if (status !== 'all') {
+      filter.status = String(status);
+    }
+    if (providerId) filter.provider = providerId;
+
+    const bookings = await Booking.find(filter)
+      .populate('provider', 'name logo phone address')
+      .populate('customer', 'name email phone')
+      .populate('serviceCategory', 'name icon')
+      .sort({ createdAt: -1 })
+      .limit(Math.min(Number(limit) || 100, 500))
+      .lean();
+
+    res.json({ bookings });
+  } catch (err) {
+    next(err);
+  }
+});
 
 /**
  * GET /api/admin/categories — all categories (including inactive).
  * The public /shops/categories endpoint filters by isActive — this doesn't.
  */
+// ============================================================
+// CATEGORIES
+// ============================================================
+
 router.get('/categories', async (_req, res, next) => {
   try {
     const categories = await Category.find({})
