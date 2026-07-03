@@ -125,8 +125,15 @@ router.get('/admin/list', async (req, res, next) => {
 
     const codes = await QrCode.find(filter)
       .sort({ code: 1 })
-      .populate('shop', 'name')
+      .populate('shop', 'name address')
       .lean();
+
+    // Build a short "line1, city" location label for the marketing flyer.
+    const locLabel = (shop) => {
+      if (!shop?.address) return null;
+      const parts = [shop.address.line1, shop.address.city].filter(Boolean);
+      return parts.length ? parts.join(', ') : null;
+    };
 
     res.json({
       total: codes.length,
@@ -136,6 +143,7 @@ router.get('/admin/list', async (req, res, next) => {
         code: c.code,
         shopId: c.shop?._id ? String(c.shop._id) : null,
         shopName: c.shop?.name || null,
+        shopLocation: locLabel(c.shop),
         scans: c.scans || 0,
         note: c.note || '',
       })),
