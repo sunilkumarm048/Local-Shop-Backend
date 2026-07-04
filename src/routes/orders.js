@@ -10,6 +10,7 @@ import { calculateOrderTotals, distanceKm } from '../services/pricing.js';
 import { createRazorpayOrder } from '../services/razorpay.js';
 import { decrementStock } from '../services/inventory.js';
 import { sendPushToUser } from '../services/push.js';
+import { emailNewOrder } from '../services/email.js';
 import { HttpError } from '../middleware/error.js';
 
 const router = Router();
@@ -213,6 +214,11 @@ router.post('/checkout', requireAuth, async (req, res, next) => {
                 url: '/shop',
                 orderId: order._id.toString(),
               });
+              emailNewOrder(shop.owner, {
+                orderCode: order._id.toString().slice(-6).toUpperCase(),
+                itemCount: order.items?.length,
+                total: order.total,
+              }).catch(() => {});
             }
           } catch (err) {
             // eslint-disable-next-line no-console
