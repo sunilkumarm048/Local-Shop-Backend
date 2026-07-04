@@ -104,7 +104,8 @@ export async function sendPushToUser(userId, payload) {
       try {
         await webpush.sendNotification(
           { endpoint: sub.endpoint, keys: sub.keys },
-          notification
+          notification,
+          { urgency: 'high', TTL: 3600 }
         );
       } catch (err) {
         // 404/410 = subscription gone (user cleared site data, etc.) — prune it.
