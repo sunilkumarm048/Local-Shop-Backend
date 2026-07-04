@@ -6,6 +6,7 @@ import { requireAuth } from '../middleware/auth.js';
 import { requireRole } from '../middleware/role.js';
 import { validateBody } from '../utils/validate.js';
 import { sendPushToUser } from '../services/push.js';
+import { emailNewBooking, emailBookingStatus } from '../services/email.js';
 import { HttpError } from '../middleware/error.js';
 
 const router = Router();
@@ -102,6 +103,14 @@ router.post('/', requireAuth, async (req, res, next) => {
       sendPushToUser(provider.owner, {
         title: 'New service request',
         body: `${data.serviceName} — tap to view`,
+      }).catch(() => {});
+      emailNewBooking(provider.owner, {
+        serviceName: data.serviceName,
+        customerName: data.contactName || req.user?.name,
+        when: data.requestNow ? 'As soon as possible' : data.scheduledAt,
+        address: data.address
+          ? [data.address.line1, data.address.city].filter(Boolean).join(', ')
+          : undefined,
       }).catch(() => {});
     }
 
@@ -285,6 +294,10 @@ router.patch(
         sendPushToUser(booking.customer, {
           title: labels[data.status],
           body: booking.serviceName,
+        }).catch(() => {});
+        emailBookingStatus(booking.customer, {
+          serviceName: booking.serviceName,
+          status: data.status,
         }).catch(() => {});
       }
 
