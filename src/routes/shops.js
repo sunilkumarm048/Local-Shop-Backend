@@ -515,7 +515,9 @@ router.patch(
         { _id: req.params.id },
         {
           $set: {
-            location: { type: 'Point', coordinates: [data.lng, data.lat] },
+            // Live position → separate field; the fixed `location` (storefront)
+            // is never overwritten by tracking.
+            liveLocation: { type: 'Point', coordinates: [data.lng, data.lat] },
             locationUpdatedAt: new Date(),
           },
         }
