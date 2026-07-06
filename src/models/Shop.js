@@ -27,10 +27,21 @@ const shopSchema = new mongoose.Schema(
       pincode: String,
     },
 
-    // GeoJSON Point [longitude, latitude] — order matters
+    // GeoJSON Point [longitude, latitude] — order matters.
+    // This is the FIXED storefront/base location set at signup. It never
+    // changes from live tracking — shops always use this.
     location: {
       type: { type: String, enum: ['Point'], default: 'Point' },
       coordinates: { type: [Number], required: true },
+    },
+
+    // Service providers only: their CURRENT live position, updated continuously
+    // while available + app-open. Separate from `location` so a provider's
+    // fixed base address is never overwritten. Customers use this (when fresh)
+    // for service-provider distance; falls back to `location` if stale/absent.
+    liveLocation: {
+      type: { type: String, enum: ['Point'] },
+      coordinates: { type: [Number] },
     },
 
     isOpen: { type: Boolean, default: true },
