@@ -489,6 +489,43 @@ router.patch(
     }
   }
 );
+
+/**
+ * PATCH /api/shops/:id/location — live location ping from a service provider.
+ * Body: { lat, lng }. Kept lightweight (updateOne, no full save) because it's
+ * called frequently while the provider is available and has the app open.
+ * Only updates a provider's own shop. Background streaming isn't possible on
+ * the web; this reflects their position while the app is foregrounded.
+ */
+const liveLocationSchema = z.object({
+  lat: z.number().min(-90).max(90),
+  lng: z.number().min(-180).max(180),
+});
+
+router.patch(
+  '/:id/location',
+  requireAuth,
+  requireRole('shop'),
+  async (req, res, next) => {
+    try {
+      const data = validateBody(req, liveLocationSchema);
+      // Ownership check (throws if not the caller's shop).
+      await assertShopOwner(req, req.params.id);
+      await Shop.updateOne(
+        { _id: req.params.id },
+        {
+          $set: {
+            location: { type: 'Point', coordinates: [data.lng, data.lat] },
+            locationUpdatedAt: new Date(),
+          },
+        }
+      );
+      res.json({ ok: true });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 router.get(
   '/:id/products/all',
   requireAuth,
