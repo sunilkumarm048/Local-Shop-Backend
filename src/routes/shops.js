@@ -34,12 +34,18 @@ function computeIsService(shop) {
 /** Attach an `isService` boolean to a plain shop object (from .lean()). */
 function withServiceFlag(shop) {
   const isService = computeIsService(shop);
-  // For service providers, always surface their latest LIVE position as the
-  // effective `location` when we have one — so customers see where the provider
-  // currently is, not their registration address. The fixed base is preserved
-  // separately as `baseLocation` for reference. Product shops are untouched.
+  // Use a service provider's LIVE position as the effective `location` ONLY
+  // when it's fresh (updated within the last 5 minutes). A stale live location
+  // (provider closed their app hours ago) must NOT be used — we fall back to
+  // their fixed registration location instead, so customers never see or route
+  // to an outdated spot.
+  const LIVE_FRESH_MS = 5 * 60 * 1000;
+  const fresh =
+    shop.locationUpdatedAt &&
+    Date.now() - new Date(shop.locationUpdatedAt).getTime() < LIVE_FRESH_MS;
   if (
     isService &&
+    fresh &&
     shop.liveLocation &&
     Array.isArray(shop.liveLocation.coordinates) &&
     shop.liveLocation.coordinates.length === 2
@@ -49,6 +55,7 @@ function withServiceFlag(shop) {
       isService,
       baseLocation: shop.location,
       location: shop.liveLocation,
+      isLive: true,
     };
   }
   return { ...shop, isService };
