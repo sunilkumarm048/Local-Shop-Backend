@@ -40,6 +40,7 @@ const shopSchema = new mongoose.Schema(
     // delivery partner's online toggle. Ignored for normal product shops.
     availableNow: { type: Boolean, default: false },
     availableUpdatedAt: { type: Date },
+    locationUpdatedAt: { type: Date },
 
     openingHours: [
       {
