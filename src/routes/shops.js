@@ -34,12 +34,11 @@ function computeIsService(shop) {
 /** Attach an `isService` boolean to a plain shop object (from .lean()). */
 function withServiceFlag(shop) {
   const isService = computeIsService(shop);
-  // Use a service provider's LIVE position as the effective `location` ONLY
-  // when it's fresh (updated within the last 5 minutes). A stale live location
-  // (provider closed their app hours ago) must NOT be used — we fall back to
-  // their fixed registration location instead, so customers never see or route
-  // to an outdated spot.
-  const LIVE_FRESH_MS = 5 * 60 * 1000;
+  // Use a service provider's LIVE position as the effective `location` when
+  // it's reasonably fresh (updated within the last 15 minutes). Wider than a
+  // few minutes so the customer view doesn't flip between live and registration
+  // as the provider's app polls. Stale → fall back to fixed registration.
+  const LIVE_FRESH_MS = 15 * 60 * 1000;
   const fresh =
     shop.locationUpdatedAt &&
     Date.now() - new Date(shop.locationUpdatedAt).getTime() < LIVE_FRESH_MS;
