@@ -33,7 +33,25 @@ function computeIsService(shop) {
 
 /** Attach an `isService` boolean to a plain shop object (from .lean()). */
 function withServiceFlag(shop) {
-  return { ...shop, isService: computeIsService(shop) };
+  const isService = computeIsService(shop);
+  // For service providers, always surface their latest LIVE position as the
+  // effective `location` when we have one — so customers see where the provider
+  // currently is, not their registration address. The fixed base is preserved
+  // separately as `baseLocation` for reference. Product shops are untouched.
+  if (
+    isService &&
+    shop.liveLocation &&
+    Array.isArray(shop.liveLocation.coordinates) &&
+    shop.liveLocation.coordinates.length === 2
+  ) {
+    return {
+      ...shop,
+      isService,
+      baseLocation: shop.location,
+      location: shop.liveLocation,
+    };
+  }
+  return { ...shop, isService };
 }
 
 /**
