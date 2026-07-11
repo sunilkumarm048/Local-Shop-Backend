@@ -1,7 +1,28 @@
 import webpush from 'web-push';
 
 import { env } from '../config/env.js';
-import { PushSubscription } from '../models/index.js';
+import { PushSubscription, FcmToken } from '../models/index.js';
+
+// ---- Firebase Cloud Messaging (native Android app) ------------------------
+// Initialized lazily from the FIREBASE_SERVICE_ACCOUNT env var (full service
+// account JSON as a string). If unset or firebase-admin isn't installed,
+// FCM is skipped silently and web push continues to work as before.
+let fcmMessaging = null;
+async function initFcm() {
+  if (fcmMessaging || !env.FIREBASE_SERVICE_ACCOUNT) return;
+  try {
+    const admin = (await import('firebase-admin')).default;
+    const credentials = JSON.parse(env.FIREBASE_SERVICE_ACCOUNT);
+    if (!admin.apps.length) {
+      admin.initializeApp({ credential: admin.credential.cert(credentials) });
+    }
+    fcmMessaging = admin.messaging();
+    console.log('[push] FCM enabled (native app notifications)');
+  } catch (err) {
+    console.error('[push] FCM init failed — native push disabled:', err.message);
+  }
+}
+initFcm();
 
 /**
  * Web Push sender + in-app socket notifier.
@@ -77,7 +98,13 @@ export async function sendPushToUser(userId, payload) {
     console.error('[push] socket emit failed:', err.message);
   }
 
-  // 2. Browser Web Push — only if configured.
+  // 2. Native app (FCM) — rings the custom order sound even when the app is
+  // closed, via the "order_alerts" channel baked into the APK.
+  sendFcmToUser(id, payload).catch((err) =>
+    console.error('[push] fcm send failed:', err.message)
+  );
+
+  // 3. Browser Web Push — only if configured.
   if (!pushEnabled) return;
 
   let subs;
@@ -124,6 +151,77 @@ export async function sendPushToUser(userId, payload) {
   if (deadEndpoints.length) {
     try {
       await PushSubscription.deleteMany({ endpoint: { $in: deadEndpoints } });
+    } catch {
+      /* best effort cleanup */
+    }
+  }
+}
+
+// ---- FCM sender ------------------------------------------------------------
+
+/**
+ * Send an FCM notification to every native-app device a user has registered.
+ * Uses a "notification" message with channel_id "order_alerts" so Android
+ * displays it via the custom-ring channel even when the app is fully closed.
+ * Dead tokens (uninstalled app) are pruned automatically.
+ */
+async function sendFcmToUser(userId, payload) {
+  if (!fcmMessaging) return;
+
+  let tokens;
+  try {
+    tokens = await FcmToken.find({ user: userId }).lean();
+  } catch (err) {
+    console.error('[push] could not load fcm tokens:', err.message);
+    return;
+  }
+  if (!tokens.length) return;
+
+  const message = {
+    notification: {
+      title: payload.title,
+      body: payload.body,
+    },
+    data: {
+      url: payload.url || '/',
+      ...(payload.orderId ? { orderId: String(payload.orderId) } : {}),
+    },
+    android: {
+      priority: 'high',
+      notification: {
+        channelId: 'order_alerts', // the custom-ring channel in MainActivity
+        sound: 'shop_new_order',
+        defaultVibrateTimings: false,
+        vibrateTimingsMillis: [0, 400, 200, 400, 200, 400],
+        priority: 'max',
+        visibility: 'public',
+        ...(payload.tag ? { tag: payload.tag } : {}),
+      },
+    },
+  };
+
+  const deadTokens = [];
+  await Promise.all(
+    tokens.map(async (t) => {
+      try {
+        await fcmMessaging.send({ ...message, token: t.token });
+      } catch (err) {
+        const code = err?.errorInfo?.code || err?.code || '';
+        if (
+          code.includes('registration-token-not-registered') ||
+          code.includes('invalid-argument')
+        ) {
+          deadTokens.push(t.token);
+        } else {
+          console.error('[push] fcm send error:', code || err.message);
+        }
+      }
+    })
+  );
+
+  if (deadTokens.length) {
+    try {
+      await FcmToken.deleteMany({ token: { $in: deadTokens } });
     } catch {
       /* best effort cleanup */
     }
