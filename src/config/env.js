@@ -25,6 +25,11 @@ const schema = z.object({
   VAPID_PUBLIC_KEY: z.string().optional(),
   VAPID_PRIVATE_KEY: z.string().optional(),
   VAPID_SUBJECT: z.string().optional(), // e.g. mailto:you@example.com
+  // Firebase Cloud Messaging for the native Android app. Paste the ENTIRE
+  // service-account JSON (Firebase console → Project settings → Service
+  // accounts → Generate new private key) as one env var. Leave unset to
+  // disable FCM cleanly — web push keeps working regardless.
+  FIREBASE_SERVICE_ACCOUNT: z.string().optional(),
   // Email (Resend) for password-reset OTP and notifications. Leave unset to
   // disable email features cleanly. RESEND_FROM must be a verified sender.
   RESEND_API_KEY: z.string().optional(),
