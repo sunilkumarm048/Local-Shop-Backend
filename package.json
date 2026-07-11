@@ -1,7 +1,7 @@
 {
   "name": "local-shop-api",
   "version": "0.1.0",
-  "description": "Local Shop backend — Express + Socket.IO + MongoDB",
+  "description": "Local Shop backend \u2014 Express + Socket.IO + MongoDB",
   "type": "module",
   "main": "src/server.js",
   "scripts": {
@@ -19,6 +19,7 @@
     "dotenv": "^16.4.5",
     "express": "^4.21.1",
     "express-rate-limit": "^7.4.1",
+    "firebase-admin": "^12.7.0",
     "helmet": "^8.0.0",
     "ioredis": "^5.4.1",
     "jsonwebtoken": "^9.0.2",
