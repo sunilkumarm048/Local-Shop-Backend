@@ -103,6 +103,8 @@ router.post('/', requireAuth, async (req, res, next) => {
       sendPushToUser(provider.owner, {
         title: 'New service request',
         body: `${data.serviceName} — tap to view`,
+        url: '/shop',
+        tag: 'new-booking',
       }).catch(() => {});
       emailNewBooking(provider.owner, {
         serviceName: data.serviceName,
