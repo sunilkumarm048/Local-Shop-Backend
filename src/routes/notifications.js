@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 
-import { PushSubscription } from '../models/index.js';
+import { PushSubscription, FcmToken } from '../models/index.js';
 import { requireAuth } from '../middleware/auth.js';
 import { validateBody } from '../utils/validate.js';
 import {
@@ -60,6 +60,32 @@ router.post('/subscribe', requireAuth, async (req, res, next) => {
   }
 });
 
+
+const fcmTokenSchema = z.object({
+  token: z.string().min(10).max(4096),
+  platform: z.string().max(32).optional(),
+});
+
+/**
+ * POST /api/notifications/fcm-token
+ * Register (or refresh) a native-app FCM device token for the caller.
+ * Upserts on token so re-registering after app restart is idempotent, and
+ * re-assigns the token if a different account signs in on the same device.
+ */
+router.post('/fcm-token', requireAuth, async (req, res, next) => {
+  try {
+    const { token, platform } = validateBody(req, fcmTokenSchema);
+    await FcmToken.findOneAndUpdate(
+      { token },
+      { user: req.user._id, platform: platform || 'android', lastUsedAt: new Date() },
+      { upsert: true, setDefaultsOnInsert: true }
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
 const unsubscribeSchema = z.object({ endpoint: z.string().url() });
 
 /**
@@ -96,4 +122,3 @@ router.post('/test', requireAuth, async (req, res, next) => {
 });
 
 export default router;
-  
