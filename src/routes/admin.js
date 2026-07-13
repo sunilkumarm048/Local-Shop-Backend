@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import crypto from 'crypto';
 
-import { User, Shop, Order, Booking, Category, PricingConfig, WithdrawRequest, DeliveryProfile, Product, ProductTemplate } from '../models/index.js';
+import { User, Shop, Order, Booking, Category, PricingConfig, AppConfig, WithdrawRequest, DeliveryProfile, Product, ProductTemplate } from '../models/index.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireRole } from '../middleware/role.js';
 import { validateBody } from '../utils/validate.js';
@@ -535,6 +535,46 @@ router.patch('/pricing', async (req, res, next) => {
 
     await cfg.save();
     res.json({ config: cfg });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ============================================================
+// App config — platform feature flags (admin Settings tab)
+// ============================================================
+
+/** GET /api/admin/config — current flags. */
+router.get('/config', async (_req, res, next) => {
+  try {
+    const cfg = await AppConfig.getCurrent();
+    res.json({ flags: cfg.flags });
+  } catch (err) {
+    next(err);
+  }
+});
+
+const appConfigUpdateSchema = z.object({
+  flags: z.object({
+    showAllProducts: z.boolean().optional(),
+  }),
+});
+
+/**
+ * PATCH /api/admin/config — partial flag update.
+ * Body: { flags: { showAllProducts?: boolean } }
+ */
+router.patch('/config', async (req, res, next) => {
+  try {
+    const data = validateBody(req, appConfigUpdateSchema);
+    const cfg = await AppConfig.getCurrent();
+
+    if (typeof data.flags.showAllProducts === 'boolean') {
+      cfg.flags.showAllProducts = data.flags.showAllProducts;
+    }
+
+    await cfg.save();
+    res.json({ flags: cfg.flags });
   } catch (err) {
     next(err);
   }
