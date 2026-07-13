@@ -15,6 +15,7 @@ import templates from './templates.js';
 import geo from './geo.js';
 import qr from './qr.js';
 import search from './search.js';
+import config from './config.js';
 
 const router = Router();
 
@@ -34,6 +35,7 @@ router.use('/templates', templates);
 router.use('/geo', geo);
 router.use('/qr', qr);
 router.use('/search', search);
+router.use('/config', config);
 
 router.get('/', (_req, res) => {
   res.json({ name: 'local-shop-api', version: '0.14.0' });
