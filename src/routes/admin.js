@@ -557,6 +557,7 @@ router.get('/config', async (_req, res, next) => {
 const appConfigUpdateSchema = z.object({
   flags: z.object({
     showAllProducts: z.boolean().optional(),
+    enablePhoneLogin: z.boolean().optional(),
   }),
 });
 
@@ -571,6 +572,9 @@ router.patch('/config', async (req, res, next) => {
 
     if (typeof data.flags.showAllProducts === 'boolean') {
       cfg.flags.showAllProducts = data.flags.showAllProducts;
+    }
+    if (typeof data.flags.enablePhoneLogin === 'boolean') {
+      cfg.flags.enablePhoneLogin = data.flags.enablePhoneLogin;
     }
 
     await cfg.save();
