@@ -11,6 +11,9 @@ import mongoose from 'mongoose';
  *     switch while catalogs are being cleaned up.
  *   - enablePhoneLogin: when false, the login page hides the Email/Phone
  *     toggle and the whole OTP flow. Off until a real SMS provider is live.
+ *   - enableVoiceAssistant: when false, the customer page hides the AI voice
+ *     assistant (mic button). Off by default; flip on from admin Settings
+ *     when ready to launch it.
  */
 const appConfigSchema = new mongoose.Schema(
   {
@@ -18,6 +21,7 @@ const appConfigSchema = new mongoose.Schema(
     flags: {
       showAllProducts: { type: Boolean, default: true },
       enablePhoneLogin: { type: Boolean, default: false },
+      enableVoiceAssistant: { type: Boolean, default: false },
     },
   },
   { timestamps: true }
