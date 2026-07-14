@@ -49,6 +49,9 @@ const schema = z.object({
   GROQ_API_KEY: z.string().optional(),
   SARVAM_API_KEY: z.string().optional(),
   GEMINI_MODEL: z.string().optional(),
+  //   VOICE_BRAIN    — 'gemini' (default) or 'sarvam' (Sarvam-M, Indic-tuned).
+  //                    Falls back to the other automatically on failure.
+  VOICE_BRAIN: z.string().optional(),
   // PHASE 6a: comma-separated allowlist. Any user whose email is in here is
   // auto-granted the 'admin' role on login. The easiest way to bootstrap your
   // first admin without writing a MongoDB script.
