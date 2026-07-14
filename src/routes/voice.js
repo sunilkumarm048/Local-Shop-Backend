@@ -124,7 +124,7 @@ SARVOPAKAR CONTEXT:
 - When recommending, prefer nearby (small distanceKm) and open/available.
 
 ACTIONS (exact JSON shapes):
-Needs confirmation first: {"type":"addToCart","productName":s,"qty":n} {"type":"removeFromCart","productName":s} {"type":"changeQty","productName":s,"qty":n} {"type":"clearCart"} {"type":"goToCheckout"} {"type":"createBooking","shopName":s,"serviceName":s,"notes":s} {"type":"bookProvider","shopName":s}
+Needs confirmation first: {"type":"addToCart","productName":s,"qty":n} {"type":"removeFromCart","productName":s} {"type":"changeQty","productName":s,"qty":n} {"type":"clearCart"} {"type":"goToCheckout"} {"type":"createBooking","shopName":s,"serviceName":s,"notes":s,"requestNow":bool,"scheduledDate":"YYYY-MM-DD" or null,"scheduledSlot":s or null} {"type":"bookProvider","shopName":s}
 Instant (no confirmation): {"type":"showCart"} {"type":"searchProduct","query":s} {"type":"selectCategory","category":s} {"type":"selectShop","shopName":s} {"type":"showServices"} {"type":"showShops"} {"type":"openBookings"} {"type":"trackOrder"} {"type":"showOrderHistory"}
 
 RULES:
@@ -134,14 +134,14 @@ RULES:
    User declines (nahi/ନାହିଁ/no/cancel) → "cancelAction": true, acknowledge briefly.
    Unrelated speech → drop it, handle the new request.
 3. Navigation/search requests → return the action directly in "executeAction" (no confirmation), with a short reply like "ଦେଖାଉଛି…".
-4. BOOKING A SERVICE BY VOICE — the most important skill. When the user needs a service ("electrician chahiye", "fan kharab hai", "ପାଇପ୍ ଲିକ୍ ହେଉଛି"):
-   a. Pick the best provider from the list: matching type, availableNow=true, smallest distanceKm. If the user named a provider, use that one (exact shopName).
-   b. Build serviceName = a short summary of the job in the user's language (e.g. "Fan repair", "ପାଇପ୍ ଲିକ୍ ମରାମତି"). Extra details (floor, urgency, what exactly is broken) go in notes.
-   c. Propose {"type":"createBooking","shopName":…,"serviceName":…,"notes":…} as pendingAction, and in reply mention the provider's name + distance and ask to confirm. e.g. "Raju Electric (2.1 km) available ଅଛନ୍ତି — booking କରିଦେବି?"
-   d. If the problem is unclear, ask ONE short question first (what needs fixing?) — then propose.
-   e. If NO matching provider is availableNow: say so HONESTLY (never invent providers), suggest the closest alternative or offer to show the services list (executeAction showServices). If providers exist but are unavailable, say they're currently unavailable.
-   f. Bookings are sent as "request now" (ASAP). If the user wants a specific date/time, put it in notes and tell them the provider will confirm the timing.
-   g. After confirmation the app creates the booking and reports the result into this conversation (messages starting with [APP]) — trust those messages; if it failed, help the user with the reason.
+4. BOOKING A SERVICE BY VOICE — the most important skill. NEVER propose a booking until you know THREE things: (1) WHO (provider), (2) WHAT (the job), (3) WHEN (now or scheduled). Gather what's missing conversationally, ONE short question at a time:
+   STEP 1 — WHAT: If the user hasn't said what needs doing ("electrician bulao"), ask what the problem is ("Kya kaam hai? / କଣ କାମ ଅଛି?"). serviceName = short job summary in the user's language (e.g. "AC repair", "ପାଇପ୍ ଲିକ୍ ମରାମତି"); extra details (floor, urgency, brand) go in notes.
+   STEP 2 — WHO: Pick the best provider: matching type, availableNow=true, smallest distanceKm. If the user named one, use that exact shopName. If NO matching provider is availableNow: say so HONESTLY (never invent providers), offer alternatives or executeAction showServices.
+   STEP 3 — WHEN: If the user hasn't said when, ASK: "Abhi bhejun, ya time fix karein? / ଏବେ ପଠାଇବି ନା time ଠିକ୍ କରିବେ?"
+     - "now/abhi/turant/ଏବେ" → requestNow=true, scheduledDate=null, scheduledSlot=null.
+     - A day/time → requestNow=false, scheduledDate="YYYY-MM-DD" (TODAY in India is ${new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10)} — compute kal/tomorrow/parson/day names from this), and scheduledSlot = EXACTLY one of: "8–10 AM", "10–12 PM", "12–2 PM", "2–4 PM", "4–6 PM", "6–8 PM". Map spoken times to the nearest slot (e.g. "subah 9 baje"→"8–10 AM", "shaam ko"→ask 4–6 or 6–8). If the day is known but not the time, ask which slot, offering 2–3 options naturally.
+   STEP 4 — CONFIRM: Only when all three are known, propose {"type":"createBooking",…} as pendingAction with a full summary in reply: provider + job + time. e.g. "Likan AC repair (2.1 km), kal 10–12 PM, AC servicing — booking କରିଦେବି?"
+   AFTER: the app creates the booking and reports the result here (messages starting with [APP]) — trust those; if it failed, help the user with the reason.
    Use {"type":"bookProvider","shopName":…} only if the user explicitly wants to open the booking form and fill it themselves.
 5. Copy productName/shopName EXACTLY from the lists below. Nothing matches → say it's not available, suggest the closest alternatives, no action.
 6. Price/availability questions → answer directly from data, no action.
@@ -155,35 +155,12 @@ Respond ONLY with one JSON object, no markdown:
 {"reply": string, "lang": string, "pendingAction": object|null, "executeAction": object|null, "cancelAction": boolean}`;
 }
 
-async function think({ transcript, history, products, shops, cart, pendingAction, language }) {
-  const model = env.GEMINI_MODEL || 'gemini-2.5-flash';
-  const contents = [
-    ...history.slice(-8).map((m) => ({
-      role: m.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: String(m.content || '') }],
-    })),
-    { role: 'user', parts: [{ text: transcript }] },
-  ];
-
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
-      body: JSON.stringify({
-        system_instruction: { parts: [{ text: buildSystemPrompt({ products, shops, cart, pendingAction, language }) }] },
-        contents,
-        generationConfig: { temperature: 0.4, maxOutputTokens: 512, responseMimeType: 'application/json' },
-      }),
-    }
-  );
-  if (!res.ok) {
-    const detail = await res.text().catch(() => '');
-    throw Object.assign(new Error('AI reply failed'), { detail, step: 'llm' });
-  }
-  const data = await res.json();
-  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-  const parsed = safeParse(text.replace(/```json|```/g, '').trim(), null);
+function parseBrainJson(text, language) {
+  const cleaned = text
+    .replace(/<think>[\s\S]*?<\/think>/g, '') // Sarvam-M thinking traces
+    .replace(/```json|```/g, '')
+    .trim();
+  const parsed = safeParse(cleaned, null);
   if (!parsed || typeof parsed.reply !== 'string') {
     const fallback = language === 'od-IN' ? 'ଦୁଃଖିତ, ବୁଝିପାରିଲି ନାହିଁ। ପୁଣି କୁହନ୍ତୁ?' : 'Sorry, samajh nahi aaya. Phir se boliye?';
     return { reply: fallback, lang: language || 'hi-IN', pendingAction: null, executeAction: null, cancelAction: false };
@@ -196,6 +173,87 @@ async function think({ transcript, history, products, shops, cart, pendingAction
     executeAction: clean(parsed.executeAction),
     cancelAction: parsed.cancelAction === true,
   };
+}
+
+async function thinkGemini({ systemPrompt, history, transcript }) {
+  const model = env.GEMINI_MODEL || 'gemini-2.5-flash';
+  const contents = [
+    ...history.slice(-8).map((m) => ({
+      role: m.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: String(m.content || '') }],
+    })),
+    { role: 'user', parts: [{ text: transcript }] },
+  ];
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
+      body: JSON.stringify({
+        system_instruction: { parts: [{ text: systemPrompt }] },
+        contents,
+        generationConfig: { temperature: 0.4, maxOutputTokens: 512, responseMimeType: 'application/json' },
+      }),
+    }
+  );
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '');
+    throw Object.assign(new Error('AI reply failed'), { detail, step: 'llm' });
+  }
+  const data = await res.json();
+  return data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+}
+
+async function thinkSarvam({ systemPrompt, history, transcript }) {
+  const res = await fetch('https://api.sarvam.ai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${env.SARVAM_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'sarvam-m',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        ...history.slice(-8).map((m) => ({
+          role: m.role === 'assistant' ? 'assistant' : 'user',
+          content: String(m.content || ''),
+        })),
+        { role: 'user', content: transcript },
+      ],
+      temperature: 0.4,
+      max_tokens: 512,
+    }),
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '');
+    throw Object.assign(new Error('AI reply failed'), { detail, step: 'llm' });
+  }
+  const data = await res.json();
+  return data?.choices?.[0]?.message?.content || '';
+}
+
+/**
+ * Brain chooser — VOICE_BRAIN env var picks 'gemini' (default) or 'sarvam'
+ * (Sarvam-M, tuned for Indian languages). If the chosen brain fails, the
+ * other one is tried automatically before giving up.
+ */
+async function think({ transcript, history, products, shops, cart, pendingAction, language }) {
+  const systemPrompt = buildSystemPrompt({ products, shops, cart, pendingAction, language });
+  const args = { systemPrompt, history, transcript };
+
+  const preferSarvam = (env.VOICE_BRAIN || '').toLowerCase() === 'sarvam';
+  const primary = preferSarvam && env.SARVAM_API_KEY ? thinkSarvam : thinkGemini;
+  const backup = primary === thinkSarvam ? (env.GEMINI_API_KEY ? thinkGemini : null) : env.SARVAM_API_KEY ? thinkSarvam : null;
+
+  try {
+    return parseBrainJson(await primary(args), language);
+  } catch (e) {
+    console.error(`[voice] ${primary === thinkSarvam ? 'sarvam-m' : 'gemini'} brain failed:`, (e.detail || e.message || '').slice(0, 200));
+    if (!backup) throw e;
+    console.error(`[voice] falling back to ${backup === thinkSarvam ? 'sarvam-m' : 'gemini'}`);
+    return parseBrainJson(await backup(args), language);
+  }
 }
 
 /* ---------------- 3. TTS — Sarvam ---------------- */
@@ -245,7 +303,8 @@ router.get('/health', async (_req, res) => {
   ]);
 
   const allOk = groq.ok && gemini.ok && sarvam.ok;
-  res.status(allOk ? 200 : 207).json({ allOk, groq, gemini, sarvam });
+  const brain = (env.VOICE_BRAIN || '').toLowerCase() === 'sarvam' ? 'sarvam-m' : env.GEMINI_MODEL || 'gemini-2.5-flash';
+  res.status(allOk ? 200 : 207).json({ allOk, brain, groq, gemini, sarvam });
 });
 
 /* ---------------- Speak app messages ---------------- */
@@ -274,7 +333,7 @@ router.post('/say', async (req, res) => {
 /* ---------------- Main route ---------------- */
 
 router.post('/', upload.single('audio'), async (req, res) => {
-  if (!env.GEMINI_API_KEY || (!env.SARVAM_API_KEY && !env.GROQ_API_KEY)) {
+  if ((!env.GEMINI_API_KEY && !env.SARVAM_API_KEY) || (!env.SARVAM_API_KEY && !env.GROQ_API_KEY)) {
     return res.status(503).json({ error: 'Voice assistant is not configured on the server.' });
   }
   if (!req.file || !req.file.buffer?.length) {
