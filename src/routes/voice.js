@@ -3,54 +3,42 @@ import multer from 'multer';
 import { env } from '../config/env.js';
 
 /**
- * POST /api/voice — the AI voice assistant pipeline, moved from the old
- * Cloudflare Worker into our own backend so all keys live in Render env vars.
+ * POST /api/voice — Sarvopakar's multilingual AI voice assistant.
+ * GET  /api/voice/health — checks each AI provider and reports status.
  *
- *   1. STT   — Groq Whisper (whisper-large-v3): audio → transcript.
- *              Handles Hinglish/Hindi/English naturally.
- *   2. Brain — Google Gemini: transcript + catalog + cart + pending action →
- *              short spoken-style reply + shopping action (JSON).
- *   3. TTS   — Sarvam AI (bulbul:v2, hi-IN): reply text → WAV audio (base64).
+ * Pipeline (all keys are server-side Render env vars):
+ *   1. STT   — Sarvam Saarika (saarika:v2.5, auto language detect: Odia /
+ *              Hindi / English / other Indian languages). Falls back to
+ *              Groq Whisper if Sarvam STT fails or isn't configured.
+ *   2. Brain — Google Gemini: replies in the USER'S OWN LANGUAGE (Odia in
+ *              Odia script, Hindi, English…), knows Sarvopakar's shops,
+ *              service providers (electrician/plumber/…), cart, distances,
+ *              and open/available status. Proposes app actions.
+ *   3. TTS   — Sarvam bulbul:v2, spoken in the same language as the reply
+ *              (od-IN / hi-IN / en-IN / …). Best-effort: text still returned
+ *              if TTS fails.
  *
- * Request (multipart/form-data — matches the frontend VoiceAssistant):
- *   audio         webm/mp4 blob of the user's speech
- *   products      JSON array [{name, price, mrp, weight, shopName, category, inStock}]
- *   shops         JSON array [{shopName, category, isOpen}]
- *   cart          JSON array [{name, qty, price}]
- *   history       JSON array [{role: 'user'|'assistant', content}]
- *   pendingAction JSON object or null — action awaiting user confirmation
- *
- * Response JSON (same protocol the old worker used):
+ * Response protocol (unchanged, matches the frontend VoiceAssistant):
  *   { transcript, replyText, replyAudio?, pendingAction?, executeAction?, cancelAction? }
  *
- * Actions use confirm-before-execute: we propose `pendingAction`, the client
- * echoes it back next turn, and we return `executeAction` only once the user
- * says yes (or `cancelAction: true` if they decline).
- *
- * Env (all optional — route returns 503 if the required ones are missing):
- *   GROQ_API_KEY, GEMINI_API_KEY, SARVAM_API_KEY, GEMINI_MODEL (default gemini-2.5-flash)
+ * Confirmation policy: cart-changing actions + checkout + booking need a
+ * spoken yes; navigation/search/filter actions execute immediately.
  */
 
 const router = Router();
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 8 * 1024 * 1024 }, // 25s of webm opus is well under this
+  limits: { fileSize: 8 * 1024 * 1024 },
 });
 
-const ACTION_TYPES = [
-  'addToCart',
-  'removeFromCart',
-  'changeQty',
-  'showCart',
-  'clearCart',
-  'selectCategory',
-  'selectShop',
-  'searchProduct',
-  'goToCheckout',
-  'trackOrder',
-  'showOrderHistory',
-];
+// Must stay in sync with the frontend VoiceAssistant executor.
+const CONFIRM_ACTIONS = ['addToCart', 'removeFromCart', 'changeQty', 'clearCart', 'goToCheckout', 'bookProvider'];
+const INSTANT_ACTIONS = ['showCart', 'selectCategory', 'selectShop', 'searchProduct', 'trackOrder', 'showOrderHistory', 'showServices', 'showShops', 'openBookings'];
+const ACTION_TYPES = [...CONFIRM_ACTIONS, ...INSTANT_ACTIONS];
+
+// Languages Sarvam bulbul:v2 can speak.
+const TTS_LANGS = new Set(['od-IN', 'hi-IN', 'en-IN', 'bn-IN', 'ta-IN', 'te-IN', 'kn-IN', 'ml-IN', 'mr-IN', 'gu-IN', 'pa-IN']);
 
 function safeParse(json, fallback) {
   try {
@@ -61,18 +49,34 @@ function safeParse(json, fallback) {
   }
 }
 
-/* ---------------- 1. STT — Groq Whisper ---------------- */
+/* ---------------- 1. STT ---------------- */
 
-async function transcribe(file) {
+async function sttSarvam(file) {
   const fd = new FormData();
-  fd.append(
-    'file',
-    new Blob([file.buffer], { type: file.mimetype || 'audio/webm' }),
-    'audio.webm'
-  );
-  fd.append('model', 'whisper-large-v3');
-  fd.append('response_format', 'json');
+  fd.append('file', new Blob([file.buffer], { type: file.mimetype || 'audio/webm' }), 'audio.webm');
+  fd.append('model', 'saarika:v2.5');
+  fd.append('language_code', 'unknown'); // auto-detect (Odia, Hindi, English, …)
+  const res = await fetch('https://api.sarvam.ai/speech-to-text', {
+    method: 'POST',
+    headers: { 'api-subscription-key': env.SARVAM_API_KEY },
+    body: fd,
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '');
+    throw Object.assign(new Error('Sarvam STT failed'), { detail, step: 'stt' });
+  }
+  const data = await res.json();
+  return {
+    transcript: (data.transcript || '').trim(),
+    language: data.language_code || null, // e.g. 'od-IN'
+  };
+}
 
+async function sttGroq(file) {
+  const fd = new FormData();
+  fd.append('file', new Blob([file.buffer], { type: file.mimetype || 'audio/webm' }), 'audio.webm');
+  fd.append('model', 'whisper-large-v3');
+  fd.append('response_format', 'verbose_json');
   const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
     method: 'POST',
     headers: { Authorization: `Bearer ${env.GROQ_API_KEY}` },
@@ -83,48 +87,67 @@ async function transcribe(file) {
     throw Object.assign(new Error('Speech-to-text failed'), { detail, step: 'stt' });
   }
   const data = await res.json();
-  return (data.text || '').trim();
+  const langMap = { or: 'od-IN', hi: 'hi-IN', en: 'en-IN', bn: 'bn-IN', ta: 'ta-IN', te: 'te-IN', kn: 'kn-IN', ml: 'ml-IN', mr: 'mr-IN', gu: 'gu-IN', pa: 'pa-IN' };
+  return {
+    transcript: (data.text || '').trim(),
+    language: langMap[data.language] || null,
+  };
+}
+
+async function transcribe(file) {
+  if (env.SARVAM_API_KEY) {
+    try {
+      return await sttSarvam(file);
+    } catch (e) {
+      console.error('[voice] Sarvam STT failed, falling back to Groq:', e.detail || e.message);
+    }
+  }
+  if (env.GROQ_API_KEY) return sttGroq(file);
+  throw Object.assign(new Error('No speech-to-text provider configured'), { step: 'stt' });
 }
 
 /* ---------------- 2. Brain — Gemini ---------------- */
 
-function buildSystemPrompt({ products, shops, cart, pendingAction }) {
-  return `You are the Sarvopakar voice assistant — a friendly shopping helper for Sarvopakar (सर्वोपकार), a hyperlocal delivery app in Odisha, India.
+function buildSystemPrompt({ products, shops, cart, pendingAction, language }) {
+  return `You are the Sarvopakar (ସର୍ବୋପକାର / सर्वोपकार) voice assistant — for a hyperlocal app in Odisha, India where customers (1) order products from nearby local shops for delivery, and (2) book home-service providers (electrician, plumber, beautician, mechanic, etc.) who visit their home.
 
-STYLE: Reply in short, natural Hinglish (Hindi written in Latin script, mixed with English). Maximum 2 short sentences — your reply is spoken aloud. Be warm and quick, like a helpful shopkeeper.
+LANGUAGE — MOST IMPORTANT RULE:
+Reply in the SAME language the user spoke. Detected language of this message: ${language || 'unknown'}.
+- Odia (od-IN) → reply in Odia, in Odia script (ଓଡ଼ିଆ). Example: "ଏକ କିଲୋ ଚିନି ₹36 ର, Sunil Tea Stall ରୁ — add କରିଦେବି?"
+- Hindi (hi-IN) → natural Hindi/Hinglish in Devanagari or Latin script.
+- English (en-IN) → simple English.
+Keep replies SHORT (max 2 sentences) — they are spoken aloud. Warm, like a helpful local shopkeeper.
 
-You can propose these actions (exact JSON shapes):
-- {"type":"addToCart","productName":string,"qty":number}
-- {"type":"removeFromCart","productName":string}
-- {"type":"changeQty","productName":string,"qty":number}
-- {"type":"showCart"}
-- {"type":"clearCart"}
-- {"type":"selectCategory","category":string}
-- {"type":"selectShop","shopName":string}
-- {"type":"searchProduct","query":string}
-- {"type":"goToCheckout"}
-- {"type":"trackOrder"}
-- {"type":"showOrderHistory"}
+SARVOPAKAR CONTEXT:
+- SHOPS list below: entries with isService=true are HOME-SERVICE PROVIDERS (availableNow=true means they can come now); others are product shops (isOpen=true means open). distanceKm = distance from the customer.
+- Products can only be ordered from OPEN shops. Services only from AVAILABLE providers.
+- When recommending, prefer nearby (small distanceKm) and open/available.
+
+ACTIONS (exact JSON shapes):
+Needs confirmation first: {"type":"addToCart","productName":s,"qty":n} {"type":"removeFromCart","productName":s} {"type":"changeQty","productName":s,"qty":n} {"type":"clearCart"} {"type":"goToCheckout"} {"type":"bookProvider","shopName":s}
+Instant (no confirmation): {"type":"showCart"} {"type":"searchProduct","query":s} {"type":"selectCategory","category":s} {"type":"selectShop","shopName":s} {"type":"showServices"} {"type":"showShops"} {"type":"openBookings"} {"type":"trackOrder"} {"type":"showOrderHistory"}
 
 RULES:
-1. Never execute immediately. When the user asks for something actionable, set "pendingAction" to the proposed action and ask a short confirmation question in "reply" (e.g. "Sunil Tea Stall se 1 kg chini, ₹36 — add kar du?").
+1. Cart/checkout/booking requests → set "pendingAction" and ask a short confirmation question. Include price and shop name when proposing addToCart.
 2. PENDING ACTION AWAITING CONFIRMATION: ${pendingAction ? JSON.stringify(pendingAction) : 'none'}.
-   - If one exists and the user confirms (haan, ha, yes, ok, theek hai, kar do, add karo), return "executeAction" set to EXACTLY that pending action, confirm briefly in "reply", and set "pendingAction" to null.
-   - If they decline (nahi, no, cancel, rehne do, mat karo), set "cancelAction" true and acknowledge briefly.
-   - If they say something unrelated, drop the pending action and handle the new request.
-3. For "productName"/"shopName", copy the EXACT name from the catalog below. If nothing matches, say it's not available and suggest the closest alternatives from the catalog — no action.
-4. Price/availability questions: answer directly from the catalog, no action needed.
-5. If the transcript is empty or gibberish, ask them to repeat.
+   User confirms (haan/ହଁ/yes/ok/theek hai/କର) → return "executeAction" = EXACTLY that pending action, confirm briefly.
+   User declines (nahi/ନାହିଁ/no/cancel) → "cancelAction": true, acknowledge briefly.
+   Unrelated speech → drop it, handle the new request.
+3. Navigation/search requests → return the action directly in "executeAction" (no confirmation), with a short reply like "ଦେଖାଉଛି…".
+4. Service requests ("electrician chahiye", "ପ୍ଲମ୍ବର ଦରକାର") → if an available provider exists, mention them (name + distance) and propose {"type":"bookProvider","shopName":<exact name>}; you may also executeAction showServices to display the list.
+5. Copy productName/shopName EXACTLY from the lists below. Nothing matches → say it's not available, suggest the closest alternatives, no action.
+6. Price/availability questions → answer directly from data, no action.
+7. "lang" field: the BCP-47 code of YOUR reply — one of od-IN, hi-IN, en-IN, bn-IN, ta-IN, te-IN, kn-IN, ml-IN, mr-IN, gu-IN, pa-IN.
 
-CATALOG (products): ${JSON.stringify(products.slice(0, 200))}
-SHOPS: ${JSON.stringify(shops.slice(0, 60))}
+PRODUCTS: ${JSON.stringify(products.slice(0, 200))}
+SHOPS & SERVICE PROVIDERS: ${JSON.stringify(shops.slice(0, 80))}
 USER'S CART: ${JSON.stringify(cart)}
 
-Respond ONLY with a single JSON object, no markdown:
-{"reply": string, "pendingAction": object|null, "executeAction": object|null, "cancelAction": boolean}`;
+Respond ONLY with one JSON object, no markdown:
+{"reply": string, "lang": string, "pendingAction": object|null, "executeAction": object|null, "cancelAction": boolean}`;
 }
 
-async function think({ transcript, history, products, shops, cart, pendingAction }) {
+async function think({ transcript, history, products, shops, cart, pendingAction, language }) {
   const model = env.GEMINI_MODEL || 'gemini-2.5-flash';
   const contents = [
     ...history.slice(-8).map((m) => ({
@@ -138,20 +161,11 @@ async function think({ transcript, history, products, shops, cart, pendingAction
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
     {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': env.GEMINI_API_KEY,
-      },
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
       body: JSON.stringify({
-        system_instruction: {
-          parts: [{ text: buildSystemPrompt({ products, shops, cart, pendingAction }) }],
-        },
+        system_instruction: { parts: [{ text: buildSystemPrompt({ products, shops, cart, pendingAction, language }) }] },
         contents,
-        generationConfig: {
-          temperature: 0.4,
-          maxOutputTokens: 512,
-          responseMimeType: 'application/json',
-        },
+        generationConfig: { temperature: 0.4, maxOutputTokens: 512, responseMimeType: 'application/json' },
       }),
     }
   );
@@ -163,12 +177,13 @@ async function think({ transcript, history, products, shops, cart, pendingAction
   const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
   const parsed = safeParse(text.replace(/```json|```/g, '').trim(), null);
   if (!parsed || typeof parsed.reply !== 'string') {
-    return { reply: 'Sorry, samajh nahi aaya. Phir se boliye?', pendingAction: null, executeAction: null, cancelAction: false };
+    const fallback = language === 'od-IN' ? 'ଦୁଃଖିତ, ବୁଝିପାରିଲି ନାହିଁ। ପୁଣି କୁହନ୍ତୁ?' : 'Sorry, samajh nahi aaya. Phir se boliye?';
+    return { reply: fallback, lang: language || 'hi-IN', pendingAction: null, executeAction: null, cancelAction: false };
   }
-  // Only pass through action types the frontend knows how to run.
   const clean = (a) => (a && typeof a === 'object' && ACTION_TYPES.includes(a.type) ? a : null);
   return {
     reply: parsed.reply,
+    lang: TTS_LANGS.has(parsed.lang) ? parsed.lang : language || 'hi-IN',
     pendingAction: clean(parsed.pendingAction),
     executeAction: clean(parsed.executeAction),
     cancelAction: parsed.cancelAction === true,
@@ -177,16 +192,13 @@ async function think({ transcript, history, products, shops, cart, pendingAction
 
 /* ---------------- 3. TTS — Sarvam ---------------- */
 
-async function speak(text) {
+async function speak(text, lang) {
   const res = await fetch('https://api.sarvam.ai/text-to-speech', {
     method: 'POST',
-    headers: {
-      'api-subscription-key': env.SARVAM_API_KEY,
-      'Content-Type': 'application/json',
-    },
+    headers: { 'api-subscription-key': env.SARVAM_API_KEY, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       inputs: [text.slice(0, 450)],
-      target_language_code: 'hi-IN',
+      target_language_code: TTS_LANGS.has(lang) ? lang : 'hi-IN',
       speaker: 'anushka',
       model: 'bulbul:v2',
       speech_sample_rate: 22050,
@@ -197,13 +209,41 @@ async function speak(text) {
     throw Object.assign(new Error('Text-to-speech failed'), { detail, step: 'tts' });
   }
   const data = await res.json();
-  return data?.audios?.[0] || null; // base64 WAV
+  return data?.audios?.[0] || null;
 }
 
-/* ---------------- Route ---------------- */
+/* ---------------- Health check ---------------- */
+
+router.get('/health', async (_req, res) => {
+  async function check(name, fn) {
+    if (!fn) return { configured: false, ok: false, note: 'API key not set in Render env' };
+    try {
+      const r = await fn();
+      return { configured: true, ok: r.ok, status: r.status, note: r.ok ? 'working' : (await r.text().catch(() => '')).slice(0, 140) };
+    } catch (e) {
+      return { configured: true, ok: false, note: String(e.message).slice(0, 140) };
+    }
+  }
+
+  const [groq, gemini, sarvam] = await Promise.all([
+    check('groq', env.GROQ_API_KEY && (() => fetch('https://api.groq.com/openai/v1/models', { headers: { Authorization: `Bearer ${env.GROQ_API_KEY}` } }))),
+    check('gemini', env.GEMINI_API_KEY && (() => fetch('https://generativelanguage.googleapis.com/v1beta/models', { headers: { 'x-goog-api-key': env.GEMINI_API_KEY } }))),
+    check('sarvam', env.SARVAM_API_KEY && (() =>
+      fetch('https://api.sarvam.ai/text-to-speech', {
+        method: 'POST',
+        headers: { 'api-subscription-key': env.SARVAM_API_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ inputs: ['ok'], target_language_code: 'od-IN', speaker: 'anushka', model: 'bulbul:v2' }),
+      }))),
+  ]);
+
+  const allOk = groq.ok && gemini.ok && sarvam.ok;
+  res.status(allOk ? 200 : 207).json({ allOk, groq, gemini, sarvam });
+});
+
+/* ---------------- Main route ---------------- */
 
 router.post('/', upload.single('audio'), async (req, res) => {
-  if (!env.GROQ_API_KEY || !env.GEMINI_API_KEY) {
+  if (!env.GEMINI_API_KEY || (!env.SARVAM_API_KEY && !env.GROQ_API_KEY)) {
     return res.status(503).json({ error: 'Voice assistant is not configured on the server.' });
   }
   if (!req.file || !req.file.buffer?.length) {
@@ -217,23 +257,21 @@ router.post('/', upload.single('audio'), async (req, res) => {
   const pendingAction = safeParse(req.body.pendingAction, null);
 
   try {
-    const transcript = await transcribe(req.file);
+    const { transcript, language } = await transcribe(req.file);
     if (!transcript) {
       return res.json({
         transcript: '',
-        replyText: 'Kuch sunai nahi diya — phir se boliye?',
+        replyText: language === 'od-IN' ? 'କିଛି ଶୁଣାଗଲା ନାହିଁ — ପୁଣି କୁହନ୍ତୁ?' : 'Kuch sunai nahi diya — phir se boliye?',
         pendingAction,
       });
     }
 
-    const brain = await think({ transcript, history, products, shops, cart, pendingAction });
+    const brain = await think({ transcript, history, products, shops, cart, pendingAction, language });
 
-    // TTS is best-effort: if Sarvam is down or the key is missing, the text
-    // reply still goes out and the client just skips audio playback.
     let replyAudio = null;
     if (env.SARVAM_API_KEY && brain.reply) {
       try {
-        replyAudio = await speak(brain.reply);
+        replyAudio = await speak(brain.reply, brain.lang);
       } catch (e) {
         console.error('[voice] TTS failed:', e.detail || e.message);
       }
