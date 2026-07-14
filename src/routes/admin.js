@@ -558,6 +558,7 @@ const appConfigUpdateSchema = z.object({
   flags: z.object({
     showAllProducts: z.boolean().optional(),
     enablePhoneLogin: z.boolean().optional(),
+    enableVoiceAssistant: z.boolean().optional(),
   }),
 });
 
@@ -575,6 +576,9 @@ router.patch('/config', async (req, res, next) => {
     }
     if (typeof data.flags.enablePhoneLogin === 'boolean') {
       cfg.flags.enablePhoneLogin = data.flags.enablePhoneLogin;
+    }
+    if (typeof data.flags.enableVoiceAssistant === 'boolean') {
+      cfg.flags.enableVoiceAssistant = data.flags.enableVoiceAssistant;
     }
 
     await cfg.save();
