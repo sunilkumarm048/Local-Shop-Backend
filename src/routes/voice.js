@@ -212,7 +212,11 @@ async function thinkSarvam({ systemPrompt, history, transcript }) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'sarvam-m',
+      // sarvam-m was deprecated; sarvam-30b is Sarvam's recommended model
+      // for real-time voice pipelines. reasoning_effort null disables the
+      // default thinking mode — faster + cheaper for short shopping turns.
+      model: env.SARVAM_MODEL || 'sarvam-30b',
+      reasoning_effort: null,
       messages: [
         { role: 'system', content: systemPrompt },
         ...history.slice(-8).map((m) => ({
@@ -303,7 +307,7 @@ router.get('/health', async (_req, res) => {
   ]);
 
   const allOk = groq.ok && gemini.ok && sarvam.ok;
-  const brain = (env.VOICE_BRAIN || '').toLowerCase() === 'sarvam' ? 'sarvam-m' : env.GEMINI_MODEL || 'gemini-2.5-flash';
+  const brain = (env.VOICE_BRAIN || '').toLowerCase() === 'sarvam' ? env.SARVAM_MODEL || 'sarvam-30b' : env.GEMINI_MODEL || 'gemini-2.5-flash';
   res.status(allOk ? 200 : 207).json({ allOk, brain, groq, gemini, sarvam });
 });
 
