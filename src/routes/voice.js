@@ -33,7 +33,7 @@ const upload = multer({
 });
 
 // Must stay in sync with the frontend VoiceAssistant executor.
-const CONFIRM_ACTIONS = ['addToCart', 'removeFromCart', 'changeQty', 'clearCart', 'goToCheckout', 'bookProvider'];
+const CONFIRM_ACTIONS = ['addToCart', 'removeFromCart', 'changeQty', 'clearCart', 'goToCheckout', 'bookProvider', 'createBooking'];
 const INSTANT_ACTIONS = ['showCart', 'selectCategory', 'selectShop', 'searchProduct', 'trackOrder', 'showOrderHistory', 'showServices', 'showShops', 'openBookings'];
 const ACTION_TYPES = [...CONFIRM_ACTIONS, ...INSTANT_ACTIONS];
 
@@ -124,7 +124,7 @@ SARVOPAKAR CONTEXT:
 - When recommending, prefer nearby (small distanceKm) and open/available.
 
 ACTIONS (exact JSON shapes):
-Needs confirmation first: {"type":"addToCart","productName":s,"qty":n} {"type":"removeFromCart","productName":s} {"type":"changeQty","productName":s,"qty":n} {"type":"clearCart"} {"type":"goToCheckout"} {"type":"bookProvider","shopName":s}
+Needs confirmation first: {"type":"addToCart","productName":s,"qty":n} {"type":"removeFromCart","productName":s} {"type":"changeQty","productName":s,"qty":n} {"type":"clearCart"} {"type":"goToCheckout"} {"type":"createBooking","shopName":s,"serviceName":s,"notes":s} {"type":"bookProvider","shopName":s}
 Instant (no confirmation): {"type":"showCart"} {"type":"searchProduct","query":s} {"type":"selectCategory","category":s} {"type":"selectShop","shopName":s} {"type":"showServices"} {"type":"showShops"} {"type":"openBookings"} {"type":"trackOrder"} {"type":"showOrderHistory"}
 
 RULES:
@@ -134,7 +134,15 @@ RULES:
    User declines (nahi/ନାହିଁ/no/cancel) → "cancelAction": true, acknowledge briefly.
    Unrelated speech → drop it, handle the new request.
 3. Navigation/search requests → return the action directly in "executeAction" (no confirmation), with a short reply like "ଦେଖାଉଛି…".
-4. Service requests ("electrician chahiye", "ପ୍ଲମ୍ବର ଦରକାର") → if an available provider exists, mention them (name + distance) and propose {"type":"bookProvider","shopName":<exact name>}; you may also executeAction showServices to display the list.
+4. BOOKING A SERVICE BY VOICE — the most important skill. When the user needs a service ("electrician chahiye", "fan kharab hai", "ପାଇପ୍ ଲିକ୍ ହେଉଛି"):
+   a. Pick the best provider from the list: matching type, availableNow=true, smallest distanceKm. If the user named a provider, use that one (exact shopName).
+   b. Build serviceName = a short summary of the job in the user's language (e.g. "Fan repair", "ପାଇପ୍ ଲିକ୍ ମରାମତି"). Extra details (floor, urgency, what exactly is broken) go in notes.
+   c. Propose {"type":"createBooking","shopName":…,"serviceName":…,"notes":…} as pendingAction, and in reply mention the provider's name + distance and ask to confirm. e.g. "Raju Electric (2.1 km) available ଅଛନ୍ତି — booking କରିଦେବି?"
+   d. If the problem is unclear, ask ONE short question first (what needs fixing?) — then propose.
+   e. If NO matching provider is availableNow: say so HONESTLY (never invent providers), suggest the closest alternative or offer to show the services list (executeAction showServices). If providers exist but are unavailable, say they're currently unavailable.
+   f. Bookings are sent as "request now" (ASAP). If the user wants a specific date/time, put it in notes and tell them the provider will confirm the timing.
+   g. After confirmation the app creates the booking and reports the result into this conversation (messages starting with [APP]) — trust those messages; if it failed, help the user with the reason.
+   Use {"type":"bookProvider","shopName":…} only if the user explicitly wants to open the booking form and fill it themselves.
 5. Copy productName/shopName EXACTLY from the lists below. Nothing matches → say it's not available, suggest the closest alternatives, no action.
 6. Price/availability questions → answer directly from data, no action.
 7. "lang" field: the BCP-47 code of YOUR reply — one of od-IN, hi-IN, en-IN, bn-IN, ta-IN, te-IN, kn-IN, ml-IN, mr-IN, gu-IN, pa-IN.
@@ -240,6 +248,29 @@ router.get('/health', async (_req, res) => {
   res.status(allOk ? 200 : 207).json({ allOk, groq, gemini, sarvam });
 });
 
+/* ---------------- Speak app messages ---------------- */
+
+/**
+ * POST /api/voice/say — { text, lang } → { audio } (base64 WAV).
+ * Lets the app announce results it produced client-side (booking created,
+ * login needed, booking failed…) in the same voice and language as the
+ * conversation. Text is capped short; returns { audio: null } when TTS is
+ * unavailable so the client falls back to on-screen text.
+ */
+router.post('/say', async (req, res) => {
+  const text = String(req.body?.text || '').slice(0, 300).trim();
+  const lang = String(req.body?.lang || 'hi-IN');
+  if (!text) return res.status(400).json({ error: 'No text' });
+  if (!env.SARVAM_API_KEY) return res.json({ audio: null });
+  try {
+    const audio = await speak(text, lang);
+    return res.json({ audio });
+  } catch (e) {
+    console.error('[voice] say failed:', e.detail || e.message);
+    return res.json({ audio: null });
+  }
+});
+
 /* ---------------- Main route ---------------- */
 
 router.post('/', upload.single('audio'), async (req, res) => {
@@ -281,6 +312,7 @@ router.post('/', upload.single('audio'), async (req, res) => {
       transcript,
       replyText: brain.reply,
       replyAudio,
+      lang: brain.lang,
       pendingAction: brain.pendingAction,
       executeAction: brain.executeAction,
       cancelAction: brain.cancelAction,
