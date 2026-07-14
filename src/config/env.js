@@ -52,6 +52,9 @@ const schema = z.object({
   //   VOICE_BRAIN    — 'gemini' (default) or 'sarvam' (Sarvam-M, Indic-tuned).
   //                    Falls back to the other automatically on failure.
   VOICE_BRAIN: z.string().optional(),
+  //   SARVAM_MODEL   — optional Sarvam chat model override (default sarvam-30b;
+  //                    'sarvam-105b' for the flagship).
+  SARVAM_MODEL: z.string().optional(),
   // PHASE 6a: comma-separated allowlist. Any user whose email is in here is
   // auto-granted the 'admin' role on login. The easiest way to bootstrap your
   // first admin without writing a MongoDB script.
