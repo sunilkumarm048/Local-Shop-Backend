@@ -41,6 +41,14 @@ const schema = z.object({
   // (typos, half-words). Leave unset to fall back to the raw query cleanly.
   // Use a Google Cloud project WITHOUT billing to keep the free tier active.
   GEMINI_API_KEY: z.string().optional(),
+  // Voice assistant pipeline (POST /api/voice). All server-side secrets:
+  //   GROQ_API_KEY   — Groq Whisper speech-to-text
+  //   SARVAM_API_KEY — Sarvam AI text-to-speech (Hindi/Hinglish voice)
+  //   GEMINI_MODEL   — optional Gemini model override (default gemini-2.5-flash)
+  // GEMINI_API_KEY above doubles as the assistant's brain.
+  GROQ_API_KEY: z.string().optional(),
+  SARVAM_API_KEY: z.string().optional(),
+  GEMINI_MODEL: z.string().optional(),
   // PHASE 6a: comma-separated allowlist. Any user whose email is in here is
   // auto-granted the 'admin' role on login. The easiest way to bootstrap your
   // first admin without writing a MongoDB script.
@@ -63,4 +71,3 @@ export const ADMIN_EMAILS = (env.ADMIN_EMAILS || '')
   .split(',')
   .map((e) => e.trim().toLowerCase())
   .filter(Boolean);
-  
