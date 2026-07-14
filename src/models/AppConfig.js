@@ -9,12 +9,15 @@ import mongoose from 'mongoose';
  *   - showAllProducts: when false, the customer home page hides the
  *     "All Products" feed (shops strip stays visible). Temporary kill
  *     switch while catalogs are being cleaned up.
+ *   - enablePhoneLogin: when false, the login page hides the Email/Phone
+ *     toggle and the whole OTP flow. Off until a real SMS provider is live.
  */
 const appConfigSchema = new mongoose.Schema(
   {
     key: { type: String, default: 'app', unique: true }, // forces singleton
     flags: {
       showAllProducts: { type: Boolean, default: true },
+      enablePhoneLogin: { type: Boolean, default: false },
     },
   },
   { timestamps: true }
