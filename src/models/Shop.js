@@ -85,6 +85,9 @@ const shopSchema = new mongoose.Schema(
 );
 
 shopSchema.index({ location: '2dsphere' });
+// Live positions are geo-searchable too, so a traveling service provider is
+// discoverable in the area he's actually standing in (see GET /shops).
+shopSchema.index({ liveLocation: '2dsphere' });
 shopSchema.index({ name: 'text', description: 'text' });
 
 export default mongoose.model('Shop', shopSchema);
