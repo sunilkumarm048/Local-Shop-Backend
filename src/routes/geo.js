@@ -142,4 +142,51 @@ function shortFromNominatim(r) {
   );
 }
 
+/**
+ * GET /api/geo/route-distance?olat=..&olng=..&dests=lat,lng|lat,lng|...
+ *
+ * Road distance + travel time from one origin (the customer) to up to 20
+ * destinations (service providers), via Ola Maps Distance Matrix. The API
+ * key stays server-side. Returns { results: [{ km, mins } | null, ...] } in
+ * destination order, or { results: null } when Ola is unavailable — the
+ * frontend then keeps its straight-line estimate.
+ */
+router.get('/route-distance', async (req, res) => {
+  try {
+    const { olat, olng, dests } = req.query;
+    const origin = `${Number(olat)},${Number(olng)}`;
+    const list = String(dests || '')
+      .split('|')
+      .filter(Boolean)
+      .slice(0, 20);
+    if (!hasOla() || !Number(olat) || !Number(olng) || list.length === 0) {
+      return res.json({ results: null });
+    }
+    const url =
+      `https://api.olamaps.io/routing/v1/distanceMatrix/basic?origins=${encodeURIComponent(origin)}` +
+      `&destinations=${encodeURIComponent(list.join('|'))}&api_key=${env.OLA_MAPS_API_KEY}`;
+    const r = await fetch(url);
+    if (!r.ok) {
+      console.error('[geo] distance matrix failed:', r.status);
+      return res.json({ results: null });
+    }
+    const data = await r.json();
+    const elements = data?.rows?.[0]?.elements || [];
+    const results = list.map((_, i) => {
+      const el = elements[i];
+      const meters = Number(el?.distance);
+      const seconds = Number(el?.duration);
+      if (!el || (el.status && el.status !== 'OK') || !Number.isFinite(meters)) return null;
+      return {
+        km: Math.round((meters / 1000) * 10) / 10,
+        mins: Number.isFinite(seconds) ? Math.max(1, Math.round(seconds / 60)) : null,
+      };
+    });
+    return res.json({ results });
+  } catch (e) {
+    console.error('[geo] distance matrix error:', e.message);
+    return res.json({ results: null });
+  }
+});
+
 export default router;
