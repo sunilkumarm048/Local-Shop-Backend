@@ -180,11 +180,61 @@ router.get('/', optionalAuth, async (req, res, next) => {
       cursor = Shop.find(filter).sort({ createdAt: -1 });
     }
 
-    const shops = await cursor
+    let shops = await cursor
       .limit(Number(limit))
       .skip(Number(skip))
       .populate({ path: 'category', populate: { path: 'parent' } })
       .lean();
+
+    // ---- Traveling service providers ----
+    // The $nearSphere above runs on the REGISTERED `location`, so a provider
+    // who has moved to a different area today (fresh liveLocation, Available)
+    // wouldn't match customers where he's actually standing. Second pass:
+    // find providers whose LIVE position is within the radius and merge them
+    // in. The live-substitution step below then makes their displayed
+    // location = live spot, so distance and nearest-first sorting are correct.
+    if (hasGeo) {
+      const LIVE_FRESH_MS = 15 * 60 * 1000; // keep in sync with attach logic
+      const liveFilter = {
+        isApproved: true,
+        isBlocked: false,
+        availableNow: true,
+        locationUpdatedAt: { $gte: new Date(Date.now() - LIVE_FRESH_MS) },
+        liveLocation: {
+          $nearSphere: {
+            $geometry: { type: 'Point', coordinates: [Number(lng), Number(lat)] },
+            $maxDistance: Number(radiusKm) * 1000,
+          },
+        },
+      };
+      if (category) liveFilter.category = category;
+      if (term) {
+        const words = term
+          .split(/\s+/)
+          .filter(Boolean)
+          .map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+        const clauses = [];
+        for (const w of words) {
+          clauses.push({ name: { $regex: w, $options: 'i' } });
+          clauses.push({ description: { $regex: w, $options: 'i' } });
+        }
+        if (clauses.length) liveFilter.$or = clauses;
+      }
+      try {
+        const travelers = await Shop.find(liveFilter)
+          .limit(Number(limit))
+          .populate({ path: 'category', populate: { path: 'parent' } })
+          .lean();
+        const seen = new Set(shops.map((s) => String(s._id)));
+        for (const t of travelers) {
+          if (!seen.has(String(t._id))) shops.push(t);
+        }
+      } catch (e) {
+        // Index still building on a fresh deploy — main results still serve.
+        console.error('[shops] traveler live query failed:', e.message);
+      }
+    }
+
     res.json({ shops: await attachBusyFlags(shops) });
   } catch (err) {
     next(err);
