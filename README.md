@@ -1,10 +1,11 @@
-# Local Shop — Backend API
+# Sarvopakar (ସର୍ବୋପକାର) — Backend API
 
-REST + real-time API powering **Local Shop**, a hyperlocal commerce platform for
-India: customers order from nearby shops with fast delivery, local **service**
-providers are discoverable "near me," and shop owners, delivery partners, and
-admins each get their own tooling. This repo is the **Node/Express API**. The
-web client lives in a separate frontend repo.
+REST + real-time API powering **Sarvopakar** (https://www.sarvopakar.com), a
+hyperlocal commerce platform for Odisha, India: customers order from nearby
+shops with fast delivery, book local **home-service** providers "near me" with
+live provider location, and shop owners, delivery partners, and admins each
+get their own tooling. This repo is the **Node/Express API**. The web client
+lives in a separate frontend repo.
 
 > Companion repo: [local-shop-frontend](https://github.com/sunilkumarm048/local-shop-frontend)
 
@@ -25,6 +26,19 @@ web client lives in a separate frontend repo.
 - **Reviews** — ratings, reviews, and review photos; recomputed shop ratings
 - **Realtime** — Socket.IO (Redis-backed) for live order tracking & events
 - **Notifications** — Web Push (VAPID) with graceful in-app socket fallback
+- **Service bookings** — request-now or scheduled (date + slot) bookings with
+  provider accept/decline and live status
+- **Live provider location** — GPS pings with a freshness window, so customers
+  see accurate distance; **road distance + ETA** via Ola Maps Distance Matrix
+- **AI voice assistant** — `/api/voice`: Sarvam Saarika STT (Odia/Hindi/English
+  auto-detect) → Gemini or Sarvam-30B brain (switchable, auto-fallback) →
+  Sarvam Bulbul TTS; drives cart actions and real service bookings, with a
+  `/api/voice/health` provider check
+- **Emails** — transactional email via Resend (password reset, notifications)
+- **Feature flags** — `AppConfig` singleton + admin endpoints powering the
+  admin Settings toggles (products feed, phone login, voice assistant)
+- **Geo proxy** — Ola Maps autocomplete / reverse-geocode / distance matrix
+  with OpenStreetMap fallback (API key stays server-side)
 - **Housekeeping** — background job that cancels abandoned (unpaid) orders
 
 ---
@@ -104,6 +118,20 @@ MSG91_SENDER_ID=...
 VAPID_PUBLIC_KEY=...
 VAPID_PRIVATE_KEY=...
 VAPID_SUBJECT=mailto:you@example.com
+
+# Maps / geo (server-side proxy; OSM fallback if unset)
+OLA_MAPS_API_KEY=...
+
+# AI voice assistant (all optional — /api/voice/health reports status)
+SARVAM_API_KEY=...                       # Saarika STT + Bulbul TTS (+ Sarvam-30B brain)
+GEMINI_API_KEY=...                       # assistant brain (default) + AI search
+GROQ_API_KEY=...                         # Whisper STT fallback
+VOICE_BRAIN=gemini                       # or 'sarvam' — brains auto-fallback
+GEMINI_MODEL=gemini-2.5-flash            # optional override
+SARVAM_MODEL=sarvam-30b                  # optional override
+
+# Email (Resend)
+RESEND_API_KEY=...
 
 # Maps — optional
 GOOGLE_MAPS_API_KEY=...
