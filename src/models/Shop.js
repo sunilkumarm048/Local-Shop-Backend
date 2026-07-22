@@ -53,6 +53,16 @@ const shopSchema = new mongoose.Schema(
     availableUpdatedAt: { type: Date },
     locationUpdatedAt: { type: Date },
 
+    // Service-provider booking slots (customer-visible availability).
+    // Editable by the provider from the Bookings tab.
+    slotConfig: {
+      slotMinutes: { type: Number, default: 60, min: 15, max: 240 },
+      start: { type: String, default: '09:00' }, // day start "HH:MM" 24h
+      end: { type: String, default: '18:00' },   // day end   "HH:MM" 24h
+      daysOff: { type: [Number], default: [] },  // 0=Sun … 6=Sat
+      maxDaysAhead: { type: Number, default: 7, min: 1, max: 30 },
+    },
+
     openingHours: [
       {
         day: { type: Number, min: 0, max: 6 }, // 0 = Sunday
