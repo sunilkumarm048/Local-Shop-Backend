@@ -44,6 +44,9 @@ const bookingSchema = new mongoose.Schema(
 
     scheduledDate: { type: Date },
     scheduledSlot: { type: String, trim: true },
+    // Set once the 15-minutes-before reminder push has been sent (slotReminder
+    // service) so a booking is never reminded twice.
+    reminderSentAt: { type: Date },
     requestNow: { type: Boolean, default: false },
 
     address: {
