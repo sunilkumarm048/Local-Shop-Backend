@@ -34,7 +34,12 @@ const createBookingSchema = z
     serviceCategory: z.string().min(1).optional(),
     // Either "request now" OR a scheduled date + slot.
     requestNow: z.boolean().optional(),
-    scheduledDate: z.string().datetime().optional(),
+    // Accepts a plain date "YYYY-MM-DD" (slot flow — the time is in the slot
+    // label) or a full ISO datetime (legacy callers).
+    scheduledDate: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}(T[\d:.]+(Z|[+-][\d:]+)?)?$/, 'Invalid date')
+      .optional(),
     scheduledSlot: z.string().trim().max(40).optional(),
     address: addressSchema.optional(),
     contactName: z.string().trim().max(80).optional(),
