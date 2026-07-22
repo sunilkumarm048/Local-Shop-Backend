@@ -475,7 +475,16 @@ router.get('/:id/products', async (req, res, next) => {
 // OWNER-ONLY MUTATIONS on a specific shop / its products
 // ============================================================
 
+const slotConfigSchema = z.object({
+  slotMinutes: z.number().int().min(15).max(240).optional(),
+  start: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+  end: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+  daysOff: z.array(z.number().int().min(0).max(6)).max(7).optional(),
+  maxDaysAhead: z.number().int().min(1).max(30).optional(),
+});
+
 const updateShopSchema = createShopSchema.partial().extend({
+  slotConfig: slotConfigSchema.optional(),
   isOpen: z.boolean().optional(),
 });
 
@@ -530,6 +539,9 @@ router.patch('/:id', requireAuth, requireRole('shop'), async (req, res, next) =>
       };
     }
     if (data.openingHours !== undefined) shop.openingHours = data.openingHours;
+    if (data.slotConfig !== undefined) {
+      shop.slotConfig = { ...(shop.slotConfig?.toObject?.() || shop.slotConfig || {}), ...data.slotConfig };
+    }
     if (data.isOpen !== undefined) shop.isOpen = data.isOpen;
 
     await shop.save();
