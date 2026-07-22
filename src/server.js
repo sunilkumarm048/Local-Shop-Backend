@@ -5,6 +5,7 @@ import { createApp } from './app.js';
 import { initSockets } from './sockets/index.js';
 import { startAutoAssign } from './services/autoAssign.js';
 import { startPendingOrderCleanup } from './services/pendingCleanup.js';
+import { startSlotReminder } from './services/slotReminder.js';
 import { setPushIO } from './services/push.js';
 
 async function start() {
@@ -31,6 +32,7 @@ async function start() {
   // nearest online partner. No-op when nothing matches.
   startAutoAssign(io);
   startPendingOrderCleanup();
+  startSlotReminder();
 
   // Graceful shutdown
   const shutdown = async (signal) => {
