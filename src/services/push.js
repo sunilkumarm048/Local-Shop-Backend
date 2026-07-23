@@ -189,7 +189,7 @@ async function sendFcmToUser(userId, payload) {
     android: {
       priority: 'high',
       notification: {
-        channelId: 'order_alerts', // the custom-ring channel in MainActivity
+        channelId: 'order_alerts_v2', // fresh channel (v2) — resets any muted state from the original
         sound: 'shop_new_order',
         defaultVibrateTimings: false,
         vibrateTimingsMillis: [0, 400, 200, 400, 200, 400],
@@ -227,4 +227,3 @@ async function sendFcmToUser(userId, payload) {
     }
   }
 }
-  
