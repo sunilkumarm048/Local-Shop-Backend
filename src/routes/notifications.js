@@ -103,17 +103,17 @@ router.post('/unsubscribe', requireAuth, async (req, res, next) => {
 });
 
 /**
- * POST /api/notifications/test
- * Send the caller a test notification — used by the onboarding "is it working?"
- * button in PushSetup.
+ * POST /api/notifications/test — send the caller a real test alert through
+ * every configured channel (socket, web push, FCM). Lets a provider verify
+ * the app's ring end-to-end from inside the app.
  */
 router.post('/test', requireAuth, async (req, res, next) => {
   try {
     await sendPushToUser(req.user._id, {
-      title: 'Local Shop',
-      body: 'Notifications are working! 🎉',
-      tag: 'test',
-      url: '/',
+      title: '🔔 Test alert',
+      body: 'Ring check — if you hear the order sound, alerts are working!',
+      url: '/shop',
+      tag: 'test-alert',
     });
     res.json({ ok: true });
   } catch (err) {
@@ -122,4 +122,3 @@ router.post('/test', requireAuth, async (req, res, next) => {
 });
 
 export default router;
-  
