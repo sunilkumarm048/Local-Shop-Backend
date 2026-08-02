@@ -88,6 +88,9 @@ const shopSchema = new mongoose.Schema(
     // live on the Review documents.
     gallery: { type: [String], default: [] },
 
+    // Field onboarding: agent who listed this shop via /agent.
+    onboardedBy: { type: String, trim: true },
+
     isApproved: { type: Boolean, default: false }, // admin approves new shops
     isBlocked: { type: Boolean, default: false },
   },
