@@ -6,6 +6,7 @@ import { Shop } from '../models/index.js';
 import { validateBody } from '../utils/validate.js';
 import { HttpError } from '../middleware/error.js';
 import { createShopOwnerAccount } from '../services/auth.js';
+import { emailShopWelcome } from '../services/email.js';
 import { env } from '../config/env.js';
 
 const router = Router();
@@ -99,6 +100,14 @@ router.post('/shops/quick-create', async (req, res, next) => {
       isOpen: true,
       onboardedBy: data.agentName.trim(),
     });
+
+    // Best-effort welcome email with the credentials (also on the screen).
+    emailShopWelcome(owner.email, {
+      shopName: shop.name,
+      loginEmail: owner.email,
+      tempPassword: data.ownerPassword,
+      agentName: data.agentName.trim(),
+    }).catch(() => {});
 
     res.status(201).json({
       shop,
