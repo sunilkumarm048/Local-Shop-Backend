@@ -30,6 +30,9 @@ const schema = z.object({
   // accounts → Generate new private key) as one env var. Leave unset to
   // disable FCM cleanly — web push keeps working regardless.
   FIREBASE_SERVICE_ACCOUNT: z.string().optional(),
+  // Shared access code for the /agent field-onboarding page. Unset = feature
+  // disabled. Rotate by changing the value + redeploy.
+  AGENT_ACCESS_CODE: z.string().optional(),
   // Email (Resend) for password-reset OTP and notifications. Leave unset to
   // disable email features cleanly. RESEND_FROM must be a verified sender.
   RESEND_API_KEY: z.string().optional(),
