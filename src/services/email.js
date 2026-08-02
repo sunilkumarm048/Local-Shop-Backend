@@ -167,3 +167,26 @@ export async function emailNewOrder(ownerId, { orderCode, itemCount, total, cust
     html,
   });
 }
+
+/**
+ * Welcome email for a field-onboarded shop owner: their login + temp password
+ * and what to do next. Sent by the agent/admin quick-create flows.
+ */
+export async function emailShopWelcome(to, { shopName, loginEmail, tempPassword, agentName }) {
+  const subject = `Welcome to Sarvopakar — ${shopName} is registered`;
+  const html = `
+    <div style="font-family:sans-serif;max-width:520px">
+      <h2 style="color:#128A46">Welcome to Sarvopakar 🎉</h2>
+      <p><b>${shopName}</b> has been registered on Sarvopakar${agentName ? ` by our field agent <b>${agentName}</b>` : ''}.</p>
+      <p style="background:#FFF8E6;border:1px solid #F2B90D;border-radius:8px;padding:12px">
+        <b>Your login</b><br/>
+        Email: <b>${loginEmail}</b><br/>
+        Temporary password: <b>${tempPassword}</b>
+      </p>
+      <p>Sign in at <a href="https://www.sarvopakar.com/login">www.sarvopakar.com/login</a> —
+      you'll be asked to set your own password on first login.</p>
+      <p style="color:#666;font-size:13px">Keep this email safe until you have changed your password.</p>
+    </div>`;
+  const text = `Welcome to Sarvopakar! ${shopName} is registered. Login: ${loginEmail} / Temporary password: ${tempPassword}. Sign in at https://www.sarvopakar.com/login and set your own password.`;
+  return sendEmail({ to, subject, html, text });
+}
