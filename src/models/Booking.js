@@ -42,6 +42,13 @@ const bookingSchema = new mongoose.Schema(
     serviceName: { type: String, required: true, trim: true },
     serviceCategory: { type: mongoose.Schema.Types.ObjectId, ref: 'Category' },
 
+    // 'provider_visits' (default; provider travels to customer) or
+    // 'customer_visits' (customer comes to the shop — no customer address).
+    visitType: {
+      type: String,
+      enum: ['provider_visits', 'customer_visits'],
+      default: 'provider_visits',
+    },
     scheduledDate: { type: Date },
     scheduledSlot: { type: String, trim: true },
     // Set once the 15-minutes-before reminder push has been sent (slotReminder
