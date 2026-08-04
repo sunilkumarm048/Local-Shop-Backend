@@ -519,6 +519,7 @@ const slotConfigSchema = z.object({
 });
 
 const updateShopSchema = createShopSchema.partial().extend({
+  serviceMode: z.enum(['visit_customer', 'customer_visits', 'both']).optional(),
   slotConfig: slotConfigSchema.optional(),
   isOpen: z.boolean().optional(),
 });
@@ -574,6 +575,7 @@ router.patch('/:id', requireAuth, requireRole('shop'), async (req, res, next) =>
       };
     }
     if (data.openingHours !== undefined) shop.openingHours = data.openingHours;
+    if (data.serviceMode !== undefined) shop.serviceMode = data.serviceMode;
     if (data.slotConfig !== undefined) {
       shop.slotConfig = { ...(shop.slotConfig?.toObject?.() || shop.slotConfig || {}), ...data.slotConfig };
     }
