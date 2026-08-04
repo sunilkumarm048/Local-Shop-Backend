@@ -42,6 +42,9 @@ const createBookingSchema = z
       .optional(),
     scheduledSlot: z.string().trim().max(40).optional(),
     address: addressSchema.optional(),
+    // For providers with serviceMode "both": the customer's choice to visit
+    // the shop instead of calling the provider home.
+    atShop: z.boolean().optional(),
     contactName: z.string().trim().max(80).optional(),
     contactPhone: z.string().trim().max(20).optional(),
     notes: z.string().trim().max(1000).optional(),
@@ -193,6 +196,21 @@ router.post('/', requireAuth, async (req, res, next) => {
       throw new HttpError(404, 'Service provider not found.');
     }
 
+    // Who travels? Decided by the provider's serviceMode (+ customer choice
+    // when the provider supports both).
+    const mode = provider.serviceMode || 'visit_customer';
+    const visitType =
+      mode === 'customer_visits' || (mode === 'both' && data.atShop)
+        ? 'customer_visits'
+        : 'provider_visits';
+    if (visitType === 'provider_visits') {
+      const hasPin =
+        data.address?.location?.lat != null && data.address?.location?.lng != null;
+      if (!hasPin) {
+        throw new HttpError(400, 'Please pin your address so the provider knows where to come.');
+      }
+    }
+
     if (data.requestNow) {
       // "Right now" requests only make sense if the provider isn't engaged AT
       // THIS MOMENT. Time-aware: a future slot booking doesn't block the whole
@@ -222,7 +240,8 @@ router.post('/', requireAuth, async (req, res, next) => {
       requestNow: !!data.requestNow,
       scheduledDate: data.scheduledDate ? new Date(data.scheduledDate) : undefined,
       scheduledSlot: data.scheduledSlot,
-      address: data.address
+      visitType,
+      address: visitType === 'customer_visits' ? undefined : data.address
         ? {
             ...data.address,
             location:
@@ -255,7 +274,8 @@ router.post('/', requireAuth, async (req, res, next) => {
         serviceName: data.serviceName,
         customerName: data.contactName || req.user?.name,
         when: data.requestNow ? 'As soon as possible' : data.scheduledAt,
-        address: data.address
+        visitType,
+      address: visitType === 'customer_visits' ? undefined : data.address
           ? [data.address.line1, data.address.city].filter(Boolean).join(', ')
           : undefined,
       }).catch(() => {});
@@ -273,7 +293,7 @@ router.post('/', requireAuth, async (req, res, next) => {
 router.get('/mine', requireAuth, async (req, res, next) => {
   try {
     const bookings = await Booking.find({ customer: req.user._id })
-      .populate({ path: 'provider', select: 'name logo phone location' })
+      .populate({ path: 'provider', select: 'name logo phone location address' })
       .sort({ createdAt: -1 })
       .lean();
     res.json({ bookings });
@@ -288,7 +308,7 @@ router.get('/mine', requireAuth, async (req, res, next) => {
 router.get('/:id', requireAuth, async (req, res, next) => {
   try {
     const booking = await Booking.findById(req.params.id)
-      .populate({ path: 'provider', select: 'name logo phone location' })
+      .populate({ path: 'provider', select: 'name logo phone location address' })
       .lean();
     if (!booking) throw new HttpError(404, 'Booking not found.');
     // Only the customer who made it can view it here (provider views come in Stage B).
