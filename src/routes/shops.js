@@ -61,12 +61,43 @@ function withServiceFlag(shop) {
 }
 
 /**
- * A provider is "busy" (unbookable) while committed to an active booking:
- * accepted → scheduled → on_the_way → in_progress. Freed on completed/declined/
- * cancelled. Given a list of already-fetched shops, run ONE query to find which
- * provider shops currently have such a booking, and attach a `busy` flag.
+ * A provider is "busy" (engaged RIGHT NOW), meaning:
+ *   - an active "come now" (requestNow) booking in any working status, OR
+ *   - a slot booking whose slot window covers the current time.
+ * A slot booking occupies ONLY its own time window — an accepted 4 PM
+ * appointment must not make the provider look busy at 8 AM (that bug blocked
+ * same-day "as soon as possible" requests all day). Slot times are IST wall
+ * clock, same convention as the slots endpoint and reminder service.
  */
 const ACTIVE_BOOKING_STATUSES = ['accepted', 'scheduled', 'on_the_way', 'in_progress'];
+const BUSY_IST_OFFSET_MIN = 330;
+
+function slotWindowUtc(scheduledDate, slotLabel) {
+  const times = String(slotLabel || '').match(/(\d{1,2}):(\d{2})\s*(AM|PM)?/gi);
+  if (!times || !scheduledDate) return null;
+  const toMin = (t) => {
+    const m = t.match(/(\d{1,2}):(\d{2})\s*(AM|PM)?/i);
+    let h = Number(m[1]);
+    const ap = (m[3] || '').toUpperCase();
+    if (ap === 'PM' && h !== 12) h += 12;
+    if (ap === 'AM' && h === 12) h = 0;
+    return h * 60 + Number(m[2]);
+  };
+  const startMin = toMin(times[0]);
+  const endMin = times[1] ? toMin(times[1]) : startMin + 60;
+  const dayUtc = new Date(scheduledDate).setUTCHours(0, 0, 0, 0);
+  return {
+    start: dayUtc + (startMin - BUSY_IST_OFFSET_MIN) * 60000,
+    end: dayUtc + (endMin - BUSY_IST_OFFSET_MIN) * 60000,
+  };
+}
+
+function isBusyNow(booking, now) {
+  if (booking.requestNow) return true; // "come now" job occupies until finished
+  const win = slotWindowUtc(booking.scheduledDate, booking.scheduledSlot);
+  if (!win) return true; // scheduled booking without parseable slot: play safe
+  return now >= win.start && now < win.end;
+}
 
 async function attachBusyFlags(shops) {
   const serviceShopIds = shops
@@ -75,12 +106,16 @@ async function attachBusyFlags(shops) {
 
   let busySet = new Set();
   if (serviceShopIds.length > 0) {
-    const busy = await Booking.find({
+    const active = await Booking.find({
       provider: { $in: serviceShopIds },
       status: { $in: ACTIVE_BOOKING_STATUSES },
     })
-      .distinct('provider');
-    busySet = new Set(busy.map((id) => String(id)));
+      .select('provider requestNow scheduledDate scheduledSlot')
+      .lean();
+    const now = Date.now();
+    busySet = new Set(
+      active.filter((b) => isBusyNow(b, now)).map((b) => String(b.provider))
+    );
   }
 
   return shops.map((s) => ({
