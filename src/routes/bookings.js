@@ -99,6 +99,50 @@ export function slotStartUtc(dateIso, startMin) {
  * the customer books only genuinely free time and sees when the provider is
  * next available.
  */
+
+/** Parse "9:00 AM – 10:00 AM" into a UTC [start,end) window on the given day. */
+function slotWindowUtcFromLabel(scheduledDate, slotLabel) {
+  const times = String(slotLabel || '').match(/(\d{1,2}):(\d{2})\s*(AM|PM)?/gi);
+  if (!times || !scheduledDate) return null;
+  const toMin = (t) => {
+    const m = t.match(/(\d{1,2}):(\d{2})\s*(AM|PM)?/i);
+    let h = Number(m[1]);
+    const ap = (m[3] || '').toUpperCase();
+    if (ap === 'PM' && h !== 12) h += 12;
+    if (ap === 'AM' && h === 12) h = 0;
+    return h * 60 + Number(m[2]);
+  };
+  const startMin = toMin(times[0]);
+  const endMin = times[1] ? toMin(times[1]) : startMin + 60;
+  const dayUtc = new Date(scheduledDate).setUTCHours(0, 0, 0, 0);
+  return {
+    start: dayUtc + (startMin - IST_OFFSET_MIN) * 60000,
+    end: dayUtc + (endMin - IST_OFFSET_MIN) * 60000,
+  };
+}
+
+/**
+ * Is the provider engaged RIGHT NOW? True for an active "come now" job, or a
+ * slot booking whose window covers the current time. A 4 PM appointment must
+ * not block an 8 AM "as soon as possible" request — a slot occupies only its
+ * own window. Mirrors the busy flag in routes/shops.js.
+ */
+async function isProviderBusyNow(providerId) {
+  const active = await Booking.find({
+    provider: providerId,
+    status: { $in: ACTIVE_SLOT_STATUSES.filter((s) => s !== 'requested') },
+  })
+    .select('requestNow scheduledDate scheduledSlot')
+    .lean();
+  const now = Date.now();
+  return active.some((b) => {
+    if (b.requestNow) return true;
+    const win = slotWindowUtcFromLabel(b.scheduledDate, b.scheduledSlot);
+    if (!win) return true; // unparseable schedule: play safe
+    return now >= win.start && now < win.end;
+  });
+}
+
 router.get('/slots/:providerId', async (req, res, next) => {
   try {
     const dateIso = String(req.query.date || '');
@@ -150,14 +194,10 @@ router.post('/', requireAuth, async (req, res, next) => {
     }
 
     if (data.requestNow) {
-      // "Right now" requests only make sense if the provider isn't already on
-      // a job. Scheduled slot bookings are exempt — booking tomorrow while the
-      // provider works today is exactly what slots are for.
-      const activeCount = await Booking.countDocuments({
-        provider: provider._id,
-        status: { $in: ['accepted', 'scheduled', 'on_the_way', 'in_progress'] },
-      });
-      if (activeCount > 0) {
+      // "Right now" requests only make sense if the provider isn't engaged AT
+      // THIS MOMENT. Time-aware: a future slot booking doesn't block the whole
+      // day — only an active come-now job or a slot happening right now does.
+      if (await isProviderBusyNow(provider._id)) {
         throw new HttpError(409, 'This provider is currently on a job. Please try again later.');
       }
     } else if (data.scheduledDate && data.scheduledSlot) {
