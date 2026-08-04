@@ -53,6 +53,16 @@ const shopSchema = new mongoose.Schema(
     availableUpdatedAt: { type: Date },
     locationUpdatedAt: { type: Date },
 
+    // How this service provider serves customers:
+    //   visit_customer  — provider travels to the customer's address (plumber)
+    //   customer_visits — customer comes to the shop (salon, parlour)
+    //   both            — customer chooses at booking time
+    serviceMode: {
+      type: String,
+      enum: ['visit_customer', 'customer_visits', 'both'],
+      default: 'visit_customer',
+    },
+
     // Service-provider booking slots (customer-visible availability).
     // Editable by the provider from the Bookings tab.
     slotConfig: {
@@ -90,6 +100,14 @@ const shopSchema = new mongoose.Schema(
 
     // Field onboarding: agent who listed this shop via /agent.
     onboardedBy: { type: String, trim: true },
+    // Verification documents (shop licence / Aadhaar photos) uploaded during
+    // onboarding; reviewed by the admin before approval.
+    documents: [
+      {
+        url: { type: String, required: true },
+        label: { type: String, trim: true },
+      },
+    ],
 
     isApproved: { type: Boolean, default: false }, // admin approves new shops
     isBlocked: { type: Boolean, default: false },
