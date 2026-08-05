@@ -57,10 +57,12 @@ const shopSchema = new mongoose.Schema(
     //   visit_customer  — provider travels to the customer's address (plumber)
     //   customer_visits — customer comes to the shop (salon, parlour)
     //   both            — customer chooses at booking time
+    // Unset = inferred from the category (see utils/serviceMode.js):
+    // home-visit trades default to visit_customer, shop-based services to
+    // customer_visits. Set explicitly only when the provider chooses.
     serviceMode: {
       type: String,
       enum: ['visit_customer', 'customer_visits', 'both'],
-      default: 'visit_customer',
     },
 
     // Service-provider booking slots (customer-visible availability).
