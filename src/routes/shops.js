@@ -7,6 +7,7 @@ import { optionalAuth, requireAuth } from '../middleware/auth.js';
 import { requireRole } from '../middleware/role.js';
 import { validateBody } from '../utils/validate.js';
 import { HttpError } from '../middleware/error.js';
+import { effectiveServiceMode } from '../utils/serviceMode.js';
 import { shopAnalytics } from '../services/analytics.js';
 
 const router = Router();
@@ -34,6 +35,9 @@ function computeIsService(shop) {
 /** Attach an `isService` boolean to a plain shop object (from .lean()). */
 function withServiceFlag(shop) {
   const isService = computeIsService(shop);
+  // Resolve who-travels for service providers: explicit setting, else
+  // category-based default (home-visit trades vs shop-based services).
+  const serviceMode = isService ? effectiveServiceMode(shop) : undefined;
   // Use a service provider's LIVE position as the effective `location` when
   // it's reasonably fresh (updated within the last 15 minutes). Wider than a
   // few minutes so the customer view doesn't flip between live and registration
@@ -52,12 +56,13 @@ function withServiceFlag(shop) {
     return {
       ...shop,
       isService,
+      serviceMode,
       baseLocation: shop.location,
       location: shop.liveLocation,
       isLive: true,
     };
   }
-  return { ...shop, isService };
+  return { ...shop, isService, serviceMode };
 }
 
 /**
