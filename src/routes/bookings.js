@@ -356,8 +356,11 @@ router.patch('/:id/cancel', requireAuth, async (req, res, next) => {
  */
 const PROVIDER_TRANSITIONS = {
   requested: ['accepted', 'declined'],
-  accepted: ['scheduled', 'on_the_way', 'cancelled'],
-  scheduled: ['on_the_way', 'cancelled'],
+  // in_progress directly from accepted/scheduled: shop-visit bookings skip
+  // "on the way" (the provider never travels — the customer comes to them),
+  // and home-visit providers who forgot to tap "On the way" aren't stuck.
+  accepted: ['scheduled', 'on_the_way', 'in_progress', 'cancelled'],
+  scheduled: ['on_the_way', 'in_progress', 'cancelled'],
   on_the_way: ['in_progress', 'cancelled'],
   in_progress: ['completed'],
 };
