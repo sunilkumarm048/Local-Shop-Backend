@@ -8,6 +8,7 @@ import { validateBody } from '../utils/validate.js';
 import { sendPushToUser } from '../services/push.js';
 import { emailNewBooking, emailBookingStatus } from '../services/email.js';
 import { HttpError } from '../middleware/error.js';
+import { effectiveServiceMode } from '../utils/serviceMode.js';
 
 const router = Router();
 
@@ -198,7 +199,7 @@ router.post('/', requireAuth, async (req, res, next) => {
 
     // Who travels? Decided by the provider's serviceMode (+ customer choice
     // when the provider supports both).
-    const mode = provider.serviceMode || 'visit_customer';
+    const mode = effectiveServiceMode(provider);
     const visitType =
       mode === 'customer_visits' || (mode === 'both' && data.atShop)
         ? 'customer_visits'
