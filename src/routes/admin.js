@@ -3,6 +3,7 @@ import { z } from 'zod';
 import crypto from 'crypto';
 
 import { User, Shop, Order, Booking, Category, PricingConfig, AppConfig, WithdrawRequest, DeliveryProfile, Product, ProductTemplate } from '../models/index.js';
+import adminDataRoutes from './adminData.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireRole } from '../middleware/role.js';
 import { validateBody } from '../utils/validate.js';
@@ -30,6 +31,9 @@ const router = Router();
 
 // Every route below uses these.
 router.use(requireAuth, requireRole('admin'));
+
+// Raw-but-safe database manager (browse / edit / cascade delete)
+router.use('/data', adminDataRoutes);
 
 // ============================================================
 // SUMMARY
