@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 
 import { PasswordResetCode } from '../models/index.js';
-import { sendOtpEmail } from './email.js';
+import { sendOtpEmail, sendVerifyEmail } from './email.js';
 
 /**
  * Email OTP for password reset — backed by MongoDB (NOT Redis).
@@ -65,3 +65,24 @@ export async function verifyResetOtp(rawEmail, code) {
   await PasswordResetCode.deleteOne({ _id: doc._id });
   return { ok: true };
 }
+
+
+/**
+ * Signup email verification — same storage & rules as reset codes (both just
+ * prove ownership of the inbox), but sent with a welcome-flavored email.
+ */
+export async function sendSignupOtp(rawEmail) {
+  const email = rawEmail.toLowerCase().trim();
+  const code = genCode();
+  const expiresAt = new Date(Date.now() + OTP_TTL_MS);
+  await PasswordResetCode.findOneAndUpdate(
+    { email },
+    { $set: { code, attempts: 0, expiresAt } },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
+  const res = await sendVerifyEmail(email, code);
+  if (!res.ok) return { ok: false, reason: res.disabled ? 'email_disabled' : 'send_failed' };
+  return { ok: true };
+}
+
+export const verifySignupOtp = verifyResetOtp;
