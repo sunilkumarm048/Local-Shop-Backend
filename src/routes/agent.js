@@ -50,6 +50,9 @@ function makeSlug(name) {
 }
 
 const agentQuickShopSchema = z.object({
+  // At least one verification document (shop licence / Aadhaar photo) is
+  // REQUIRED for field onboarding — the admin reviews these before approval.
+  documents: z.array(z.string().url()).min(1, 'At least one document photo is required.'),
   agentName: z.string().min(2).max(60),
   name: z.string().min(2).max(120),
   category: z.string().min(1),
@@ -96,7 +99,10 @@ router.post('/shops/quick-create', async (req, res, next) => {
       address: data.address || {},
       location: { type: 'Point', coordinates: [data.lng, data.lat] },
       slug: makeSlug(data.name),
-      isApproved: true, // field-onboarded → live immediately
+      documents: data.documents,
+      // Field-onboarded shops WAIT for admin review — the admin checks the
+      // uploaded documents in the Pending tab and approves from there.
+      isApproved: false,
       isOpen: true,
       onboardedBy: data.agentName.trim(),
     });
