@@ -189,7 +189,7 @@ async function sendFcmToUser(userId, payload) {
     android: {
       priority: 'high',
       notification: {
-        channelId: 'order_alerts_v2', // fresh channel (v2) — resets any muted state from the original
+        channelId: 'order_alerts_v3', // v3 — resets devices where v2's sound got muted (MIUI etc.)
         sound: 'shop_new_order',
         defaultVibrateTimings: false,
         vibrateTimingsMillis: [0, 400, 200, 400, 200, 400],
