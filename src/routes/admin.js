@@ -7,6 +7,7 @@ import adminDataRoutes from './adminData.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireRole } from '../middleware/role.js';
 import { validateBody } from '../utils/validate.js';
+import { emailShopApproved } from '../services/email.js';
 import { HttpError } from '../middleware/error.js';
 import { createShopOwnerAccount } from '../services/auth.js';
 
@@ -195,6 +196,13 @@ router.post('/shops/:id/approve', async (req, res, next) => {
       { new: true }
     );
     if (!shop) throw new HttpError(404, 'Shop not found');
+
+    // The go-live moment deserves a message. Best-effort: approval never
+    // fails because an email couldn't send.
+    if (shop.ownerEmail) {
+      emailShopApproved(shop.ownerEmail, { shopName: shop.name }).catch(() => {});
+    }
+
     res.json({ shop });
   } catch (err) {
     next(err);
