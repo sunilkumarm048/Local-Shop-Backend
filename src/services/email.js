@@ -58,6 +58,22 @@ export async function sendEmail({ to, subject, html, text }) {
 /**
  * Convenience: a simple OTP email with consistent branding.
  */
+export async function sendVerifyEmail(to, code) {
+  return sendEmail({
+    to,
+    subject: 'Verify your email — Sarvopakar',
+    text: `Your Sarvopakar verification code is ${code}. It expires in 10 minutes.`,
+    html: `
+      <div style="font-family: sans-serif; max-width: 420px; margin: 0 auto;">
+        <h2 style="color:#0C831F;">सर्वोपकार · Sarvopakar</h2>
+        <p>Welcome! Enter this code to verify your email:</p>
+        <p style="font-size: 28px; font-weight: bold; letter-spacing: 4px; color:#111;">${code}</p>
+        <p style="color:#666; font-size: 13px;">This code expires in 10 minutes. If you didn't create a Sarvopakar account, you can safely ignore this email.</p>
+      </div>
+    `,
+  });
+}
+
 export async function sendOtpEmail(to, code) {
   return sendEmail({
     to,
