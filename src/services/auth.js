@@ -54,6 +54,16 @@ async function maybePromoteAdmin(user) {
   await User.updateOne({ _id: user._id }, { $addToSet: { roles: 'admin' } });
 }
 
+// Email verification is enforced only for accounts created after this date.
+// Everyone who signed up earlier keeps working untouched.
+const EMAIL_VERIFICATION_SINCE = new Date('2026-08-11T00:00:00Z');
+
+export function needsEmailVerification(user) {
+  if (user.emailVerified) return false;
+  if (!user.createdAt || user.createdAt < EMAIL_VERIFICATION_SINCE) return false;
+  return true;
+}
+
 export async function registerWithEmail({ name, email, password, phone, role = 'customer' }) {
   if (!ALLOWED_SIGNUP_ROLES.includes(role)) {
     throw new HttpError(400, 'Invalid role');
@@ -107,7 +117,10 @@ export async function registerWithEmail({ name, email, password, phone, role = '
 
   await maybePromoteAdmin(user);
 
-  return { user: toPublic(user), token: issueToken(user) };
+  // New accounts must prove the email is real before they can log in. The
+  // code lands in their inbox; fake or mistyped emails never activate.
+  await sendSignupOtp(user.email);
+  return { requiresVerification: true, email: user.email };
 }
 
 export async function loginWithEmail({ email, password }) {
@@ -119,6 +132,14 @@ export async function loginWithEmail({ email, password }) {
 
   const ok = await bcrypt.compare(password, user.passwordHash);
   if (!ok) throw new HttpError(401, 'Invalid credentials');
+
+  if (needsEmailVerification(user)) {
+    // Re-send a fresh code so the user lands on the verify screen ready to go.
+    sendSignupOtp(user.email).catch(() => {});
+    const err = new HttpError(403, 'Please verify your email to continue.');
+    err.code = 'EMAIL_NOT_VERIFIED';
+    throw err;
+  }
 
   user.lastLoginAt = new Date();
   await maybePromoteAdmin(user);
@@ -238,6 +259,9 @@ export async function createShopOwnerAccount({ email, password, name, phone }) {
     passwordHash: await hashPassword(password),
     mustChangePassword: true,
     roles: ['shop'],
+    // Credentials are DELIVERED to this inbox (admin/agent onboarding), so
+    // logging in with them already proves the email is real — no OTP step.
+    emailVerified: true,
   });
   return { user, reused: false };
 }
@@ -330,4 +354,33 @@ export async function updateProfile(userId, data) {
 
   await user.save();
   return toPublic(user);
+}
+
+
+export async function verifySignupEmail(rawEmail, code) {
+  const email = String(rawEmail || '').toLowerCase().trim();
+  const check = await verifySignupOtp(email, code);
+  if (!check.ok) {
+    const msg =
+      check.reason === 'expired'
+        ? 'Code expired. Tap resend for a new one.'
+        : check.reason === 'too_many_attempts'
+          ? 'Too many wrong tries. Tap resend for a new code.'
+          : 'Wrong code. Check the email and try again.';
+    throw new HttpError(400, msg);
+  }
+  const user = await User.findOne({ email });
+  if (!user) throw new HttpError(404, 'Account not found.');
+  user.emailVerified = true;
+  user.lastLoginAt = new Date();
+  await user.save();
+  return { user: toPublic(user), token: issueToken(user) };
+}
+
+export async function resendSignupCode(rawEmail) {
+  const email = String(rawEmail || '').toLowerCase().trim();
+  const user = await User.findOne({ email });
+  // Always answer ok — never reveal whether an email is registered.
+  if (user && needsEmailVerification(user)) await sendSignupOtp(email);
+  return { ok: true };
 }
