@@ -10,6 +10,8 @@ import {
   getCurrentUser,
   setOwnPassword,
   updateProfile,
+  verifySignupEmail,
+  resendSignupCode,
 } from '../services/auth.js';
 import { sendOtp, verifyOtp } from '../services/otp.js';
 import { sendResetOtp, verifyResetOtp } from '../services/emailOtp.js';
@@ -76,6 +78,34 @@ router.post('/google', async (req, res, next) => {
     const data = validateBody(req, googleSchema);
     const result = await loginWithGoogle(data);
     res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------- Signup email verification ----------
+
+const verifyEmailSchema = z.object({
+  email: z.string().email().toLowerCase(),
+  code: z.string().trim().length(6),
+});
+
+router.post('/verify-email', async (req, res, next) => {
+  try {
+    const { email, code } = validateBody(req, verifyEmailSchema);
+    const result = await verifySignupEmail(email, code);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+const resendVerifySchema = z.object({ email: z.string().email().toLowerCase() });
+
+router.post('/resend-verification', async (req, res, next) => {
+  try {
+    const { email } = validateBody(req, resendVerifySchema);
+    res.json(await resendSignupCode(email));
   } catch (err) {
     next(err);
   }
