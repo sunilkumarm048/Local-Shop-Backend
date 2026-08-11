@@ -6,6 +6,7 @@ import { Shop } from '../models/index.js';
 import { validateBody } from '../utils/validate.js';
 import { HttpError } from '../middleware/error.js';
 import { createShopOwnerAccount } from '../services/auth.js';
+import { sendSignupOtp, verifySignupOtp } from '../services/emailOtp.js';
 import { emailShopWelcome } from '../services/email.js';
 import { env } from '../config/env.js';
 
@@ -49,16 +50,34 @@ function makeSlug(name) {
   return `${base}-${crypto.randomBytes(2).toString('hex')}`;
 }
 
+/**
+ * Counter verification: the agent sends a 6-digit code to the owner's email
+ * DURING registration. The owner reads it from their own phone on the spot —
+ * a fake or mistyped email can never complete registration.
+ */
+const sendOtpSchema = z.object({ email: z.string().email().toLowerCase() });
+
+router.post('/send-email-otp', async (req, res, next) => {
+  try {
+    const { email } = validateBody(req, sendOtpSchema);
+    const sent = await sendSignupOtp(email);
+    if (!sent.ok) throw new HttpError(502, 'Could not send the code. Check the email and try again.');
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
 const agentQuickShopSchema = z.object({
-  // At least one verification document (shop licence / Aadhaar photo) is
-  // REQUIRED for field onboarding — the admin reviews these before approval.
-  documents: z.array(z.string().url()).min(1, 'At least one document photo is required.'),
   agentName: z.string().min(2).max(60),
   name: z.string().min(2).max(120),
   category: z.string().min(1),
   phone: z.string().min(6).max(20),
   ownerEmail: z.string().email(),
   ownerPassword: z.string().min(6).max(72),
+  // 6-digit code the owner received on their email just now (see
+  // /send-email-otp). Proves the inbox is real before anything is created.
+  emailOtp: z.string().trim().length(6),
   description: z.string().max(500).optional(),
   logo: z.string().url().optional(),
   lat: z.number(),
@@ -81,12 +100,25 @@ router.post('/shops/quick-create', async (req, res, next) => {
   try {
     const data = validateBody(req, agentQuickShopSchema);
 
+    const otpCheck = await verifySignupOtp(data.ownerEmail.toLowerCase(), data.emailOtp);
+    if (!otpCheck.ok) {
+      const msg =
+        otpCheck.reason === 'expired'
+          ? 'The email code expired — tap "Send code" again.'
+          : 'Wrong email code. Ask the owner to re-check the email.';
+      throw new HttpError(400, msg);
+    }
+
     const { user: owner, reused } = await createShopOwnerAccount({
       email: data.ownerEmail,
       password: data.ownerPassword,
       name: data.name,
       phone: data.phone,
     });
+    if (!owner.emailVerified) {
+      owner.emailVerified = true; // inbox proven live at the counter via OTP
+      await owner.save();
+    }
 
     const shop = await Shop.create({
       name: data.name,
@@ -99,10 +131,7 @@ router.post('/shops/quick-create', async (req, res, next) => {
       address: data.address || {},
       location: { type: 'Point', coordinates: [data.lng, data.lat] },
       slug: makeSlug(data.name),
-      documents: data.documents,
-      // Field-onboarded shops WAIT for admin review — the admin checks the
-      // uploaded documents in the Pending tab and approves from there.
-      isApproved: false,
+      isApproved: true, // field-onboarded → live immediately
       isOpen: true,
       onboardedBy: data.agentName.trim(),
     });
