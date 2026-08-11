@@ -197,12 +197,13 @@ export async function emailShopWelcome(to, { shopName, loginEmail, tempPassword,
       <p style="background:#FFF8E6;border:1px solid #F2B90D;border-radius:8px;padding:12px">
         <b>Your login</b><br/>
         Email: <b>${loginEmail}</b><br/>
-        Temporary password: <b>${tempPassword}</b>
+        Temporary password: <b>${tempPassword}</b><br/>
+        <span style="color:#666;font-size:13px;">On your first sign-in we'll email a 6-digit code to verify this address, then you'll set your own password.</span>
       </p>
       <p>Sign in at <a href="https://www.sarvopakar.com/login">www.sarvopakar.com/login</a> —
       you'll be asked to set your own password on first login.</p>
       <p style="color:#666;font-size:13px">Keep this email safe until you have changed your password.</p>
     </div>`;
-  const text = `Welcome to Sarvopakar! ${shopName} is registered. Login: ${loginEmail} / Temporary password: ${tempPassword}. Sign in at https://www.sarvopakar.com/login and set your own password.`;
+  const text = `Welcome to Sarvopakar! ${shopName} is registered. Login: ${loginEmail} / Temporary password: ${tempPassword}. Sign in at https://www.sarvopakar.com/login — we'll email you a 6-digit code to verify this address, then you'll set your own password.`;
   return sendEmail({ to, subject, html, text });
 }
