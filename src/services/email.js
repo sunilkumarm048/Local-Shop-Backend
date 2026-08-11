@@ -189,21 +189,74 @@ export async function emailNewOrder(ownerId, { orderCode, itemCount, total, cust
  * and what to do next. Sent by the agent/admin quick-create flows.
  */
 export async function emailShopWelcome(to, { shopName, loginEmail, tempPassword, agentName }) {
-  const subject = `Welcome to Sarvopakar — ${shopName} is registered`;
+  const subject = `Welcome to Sarvopakar — ${shopName} is registered 🎉`;
   const html = `
-    <div style="font-family:sans-serif;max-width:520px">
-      <h2 style="color:#128A46">Welcome to Sarvopakar 🎉</h2>
-      <p><b>${shopName}</b> has been registered on Sarvopakar${agentName ? ` by our field agent <b>${agentName}</b>` : ''}.</p>
-      <p style="background:#FFF8E6;border:1px solid #F2B90D;border-radius:8px;padding:12px">
-        <b>Your login</b><br/>
-        Email: <b>${loginEmail}</b><br/>
-        Temporary password: <b>${tempPassword}</b><br/>
-        <span style="color:#666;font-size:13px;">On your first sign-in we'll email a 6-digit code to verify this address, then you'll set your own password.</span>
-      </p>
-      <p>Sign in at <a href="https://www.sarvopakar.com/login">www.sarvopakar.com/login</a> —
-      you'll be asked to set your own password on first login.</p>
-      <p style="color:#666;font-size:13px">Keep this email safe until you have changed your password.</p>
+    <div style="font-family:sans-serif;max-width:540px;margin:0 auto">
+      <div style="background:#F7C736;border-radius:12px 12px 0 0;padding:18px 22px">
+        <h2 style="margin:0;color:#171200">सर्वोपकार · Sarvopakar</h2>
+      </div>
+      <div style="border:1px solid #eee;border-top:none;border-radius:0 0 12px 12px;padding:22px">
+        <h3 style="color:#128A46;margin-top:0">Welcome! ${shopName} is registered 🎉</h3>
+        <p>${agentName ? `Registered at your shop by our team member <b>${agentName}</b>.` : 'Your business is now registered on Sarvopakar.'}</p>
+
+        <p style="background:#E7F5EC;border:1px solid #128A46;border-radius:8px;padding:12px;margin:14px 0">
+          <b>Status:</b> Under review ✅<br/>
+          <span style="color:#444;font-size:14px">Our team verifies new registrations — your page usually goes
+          <b>live the same day</b>. Customers will then find you on the map and can book you online.</span>
+        </p>
+
+        <p style="background:#FFF8E6;border:1px solid #F2B90D;border-radius:8px;padding:12px;margin:14px 0">
+          <b>Your login</b><br/>
+          Email: <b>${loginEmail}</b> <span style="color:#128A46">(verified ✓)</span><br/>
+          Temporary password: <b>${tempPassword}</b><br/>
+          <span style="color:#666;font-size:13px">On first sign-in you'll set your own password. Keep this email safe until then.</span>
+        </p>
+
+        <p><b>Get started in 3 steps:</b></p>
+        <ol style="padding-left:20px;line-height:1.7;margin-top:6px">
+          <li>Sign in at <a href="https://www.sarvopakar.com/login">www.sarvopakar.com/login</a> and set your password</li>
+          <li>Install the <a href="https://www.sarvopakar.com/sarvopakar-provider.apk"><b>Sarvopakar Partner app</b></a> — your phone rings loudly for every booking</li>
+          <li>In the app, open <b>My time slots</b> — set your working hours and weekly off</li>
+        </ol>
+
+        <p style="color:#666;font-size:13px;margin-bottom:0">
+          Questions? ${agentName ? `Contact ${agentName} or ` : ''}visit
+          <a href="https://www.sarvopakar.com">www.sarvopakar.com</a>.<br/>
+          Sarvopakar — supporting local businesses. 0% commission.
+        </p>
+      </div>
     </div>`;
-  const text = `Welcome to Sarvopakar! ${shopName} is registered. Login: ${loginEmail} / Temporary password: ${tempPassword}. Sign in at https://www.sarvopakar.com/login — we'll email you a 6-digit code to verify this address, then you'll set your own password.`;
+  const text =
+    `Welcome to Sarvopakar! ${shopName} is registered` +
+    (agentName ? ` by our team member ${agentName}` : '') +
+    `. Status: under review — usually live the same day. ` +
+    `Login: ${loginEmail} (verified) / Temporary password: ${tempPassword}. ` +
+    `Steps: 1) Sign in at https://www.sarvopakar.com/login and set your password. ` +
+    `2) Install the Partner app: https://www.sarvopakar.com/sarvopakar-provider.apk ` +
+    `3) Set your time slots in the app. Sarvopakar — 0% commission.`;
   return sendEmail({ to, subject, html, text });
+}
+
+
+/** Sent when the admin approves a pending shop — the go-live moment. */
+export async function emailShopApproved(to, { shopName }) {
+  return sendEmail({
+    to,
+    subject: `${shopName} is now LIVE on Sarvopakar 🎉`,
+    text: `Good news! ${shopName} has been approved and is now live on Sarvopakar. Customers near you can find you and book right away. Sign in at https://www.sarvopakar.com/login to manage bookings, timings and your page.`,
+    html: `
+      <div style="font-family: sans-serif; max-width: 440px; margin: 0 auto;">
+        <h2 style="color:#0C831F;">सर्वोपकार · Sarvopakar</h2>
+        <p style="font-size:16px;"><b>${shopName}</b> is approved and <b style="color:#0C831F;">LIVE</b> 🎉</p>
+        <p>Customers near you can now find you and book right away.</p>
+        <p>
+          <a href="https://www.sarvopakar.com/login"
+             style="display:inline-block;background:#0C831F;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none;font-weight:bold;">
+            Open my dashboard
+          </a>
+        </p>
+        <p style="color:#666;font-size:13px;">Tip: open "My time slots" once to set your working hours and days off.</p>
+      </div>
+    `,
+  });
 }
